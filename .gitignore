@@ -1,0 +1,5 @@
+# Per-Mac build settings. Never commit a developer's Team ID or local Xcode path.
+build.local.env
+
+# Per-user Xcode workspace state.
+**/xcuserdata/

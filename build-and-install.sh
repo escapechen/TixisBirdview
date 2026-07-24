@@ -1,0 +1,110 @@
+#!/bin/bash
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+readonly LOCAL_BUILD_ENV="$SCRIPT_DIR/build.local.env"
+
+if [[ -f "$LOCAL_BUILD_ENV" ]]; then
+    # Local build settings are deliberately ignored by Git.
+    # shellcheck disable=SC1090
+    source "$LOCAL_BUILD_ENV"
+fi
+
+readonly PROJECT_PATH="$SCRIPT_DIR/TixisBirdview.xcodeproj"
+readonly SCHEME="TixisBirdview"
+readonly CONFIGURATION="${CONFIGURATION:-Release}"
+readonly DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+readonly TEAM_ID="${TEAM_ID:-}"
+readonly BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/TixisBirdview-build.XXXXXX")"
+readonly DERIVED_DATA_PATH="$BUILD_ROOT/DerivedData"
+readonly BUILT_APP="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$SCHEME.app"
+readonly INSTALLED_APP="/Applications/$SCHEME.app"
+readonly STAGED_APP="/Applications/.$SCHEME.app.stage.$$"
+readonly BACKUP_APP="/Applications/.$SCHEME.app.backup.$$"
+
+cleanup() {
+    rm -rf "$BUILD_ROOT"
+}
+trap cleanup EXIT
+
+if [[ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
+    echo "Xcode was not found at: $DEVELOPER_DIR" >&2
+    echo "Install Xcode or set DEVELOPER_DIR to its Contents/Developer directory." >&2
+    exit 1
+fi
+
+if [[ ! -d "$PROJECT_PATH" ]]; then
+    echo "Project not found: $PROJECT_PATH" >&2
+    exit 1
+fi
+
+detect_project_team_id() {
+    "$DEVELOPER_DIR/usr/bin/xcodebuild" \
+        -showBuildSettings \
+        -project "$PROJECT_PATH" \
+        -scheme "$SCHEME" \
+        2>/dev/null | \
+        awk -F ' = ' '/^[[:space:]]*DEVELOPMENT_TEAM =/ { print $2; exit }' || true
+}
+
+RESOLVED_TEAM_ID="$TEAM_ID"
+TEAM_ID_SOURCE="build.local.env or the TEAM_ID environment variable"
+
+if [[ ! "$RESOLVED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+    RESOLVED_TEAM_ID="$(detect_project_team_id)"
+    TEAM_ID_SOURCE="the Team selected in Xcode"
+fi
+
+if [[ ! "$RESOLVED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+    cat >&2 <<'EOF'
+No valid Apple Developer Team ID was configured.
+The script checked build.local.env and the Team selected in Xcode.
+
+Free Personal Team: open TixisBirdview.xcodeproj in Xcode, select the
+TixisBirdview target > Signing & Capabilities, choose your Personal Team, save,
+quit Xcode, then run this script again.
+
+Paid membership: copy build.local.env.example to build.local.env and replace
+ABCDEFGHIJ with the Team ID from developer.apple.com/account > Membership details.
+
+Full instructions: docs/BUILD_FROM_SOURCE.md
+EOF
+    exit 1
+fi
+
+echo "Building $SCHEME ($CONFIGURATION)..."
+echo "Using Apple Development team from $TEAM_ID_SOURCE: $RESOLVED_TEAM_ID"
+"$DEVELOPER_DIR/usr/bin/xcodebuild" \
+    -project "$PROJECT_PATH" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    CODE_SIGN_STYLE=Automatic \
+    DEVELOPMENT_TEAM="$RESOLVED_TEAM_ID" \
+    build
+
+if [[ ! -d "$BUILT_APP" ]]; then
+    echo "Build succeeded but the app bundle was not found: $BUILT_APP" >&2
+    exit 1
+fi
+
+echo "Installing $INSTALLED_APP (sudo may prompt)..."
+sudo /bin/rm -rf "$STAGED_APP" "$BACKUP_APP"
+sudo /usr/bin/ditto "$BUILT_APP" "$STAGED_APP"
+
+if [[ -e "$INSTALLED_APP" ]]; then
+    sudo /bin/mv "$INSTALLED_APP" "$BACKUP_APP"
+fi
+
+if ! sudo /bin/mv "$STAGED_APP" "$INSTALLED_APP"; then
+    echo "Install failed; restoring the previous app bundle." >&2
+    if [[ -e "$BACKUP_APP" ]]; then
+        sudo /bin/mv "$BACKUP_APP" "$INSTALLED_APP"
+    fi
+    exit 1
+fi
+
+sudo /bin/rm -rf "$BACKUP_APP"
+
+echo "Installed: $INSTALLED_APP"
+echo "Quit and relaunch TixisBirdview if it is already running."

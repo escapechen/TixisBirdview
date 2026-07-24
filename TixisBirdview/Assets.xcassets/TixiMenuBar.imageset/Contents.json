@@ -1,0 +1,20 @@
+{
+  "images" : [
+    {
+      "filename" : "tixi-menu-18.png",
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "18x18"
+    },
+    {
+      "filename" : "tixi-menu-18@2x.png",
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "18x18"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
