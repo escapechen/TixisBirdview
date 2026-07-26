@@ -16,6 +16,8 @@ versioning when releases are tagged.
 - Frigate login support with passwords held in the macOS Keychain.
 - Connection-lost/restored notices and a red menu-bar icon for unavailable
   servers.
+- Optional popup sound alerts with a selectable macOS sound, volume, and
+  preview control.
 - Build, installation, release, and source-build documentation.
 - A Tixi-inspired app icon and monochrome menu-bar template mark.
 

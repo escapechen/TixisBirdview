@@ -97,6 +97,8 @@ struct SettingsMenuView: View {
                 Text("Keep feed open: \(Int(monitor.overlayDurationSeconds)) seconds")
             }
 
+            soundAlertSettings
+
             Picker("Feed", selection: $monitor.feedMode) {
                 ForEach(FrigateMonitor.FeedMode.allCases) { mode in
                     Text(mode.title).tag(mode)
@@ -109,6 +111,37 @@ struct SettingsMenuView: View {
                 .foregroundStyle(.secondary)
 
             classificationSettings
+        }
+    }
+
+    private var soundAlertSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Sound alert", isOn: $monitor.isSoundAlertEnabled)
+
+            if monitor.isSoundAlertEnabled {
+                HStack(spacing: 8) {
+                    Picker("Sound", selection: $monitor.alertSound) {
+                        ForEach(FrigateMonitor.AlertSound.allCases) { sound in
+                            Text(sound.title).tag(sound)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Button("Preview") {
+                        monitor.previewSoundAlert()
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Text("Volume")
+                    Slider(value: $monitor.soundAlertVolume, in: 0...1, step: 0.05)
+                    Text("\(Int((monitor.soundAlertVolume * 100).rounded()))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+                .font(.caption)
+            }
         }
     }
 

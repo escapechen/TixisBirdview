@@ -5,6 +5,7 @@
 //  Created by/with/for Marcel Kühn on 22.07.26 with the help of Codex (GPT-5.6 Terra, Extra High reasoning).
 //
 
+import AppKit
 import Foundation
 import Observation
 import Security
@@ -61,6 +62,27 @@ final class FrigateMonitor {
                 "Every Frigate object event triggers a popup."
             }
         }
+    }
+
+    enum AlertSound: String, CaseIterable, Identifiable {
+        case basso = "Basso"
+        case blow = "Blow"
+        case bottle = "Bottle"
+        case frog = "Frog"
+        case funk = "Funk"
+        case glass = "Glass"
+        case hero = "Hero"
+        case morse = "Morse"
+        case ping = "Ping"
+        case pop = "Pop"
+        case purr = "Purr"
+        case sosumi = "Sosumi"
+        case submarine = "Submarine"
+        case tink = "Tink"
+
+        var id: String { rawValue }
+
+        var title: String { rawValue }
     }
 
     enum ConnectionState {
@@ -218,6 +240,24 @@ final class FrigateMonitor {
         }
     }
 
+    var isSoundAlertEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isSoundAlertEnabled, forKey: Self.soundAlertEnabledKey)
+        }
+    }
+
+    var alertSound: AlertSound {
+        didSet {
+            UserDefaults.standard.set(alertSound.rawValue, forKey: Self.alertSoundKey)
+        }
+    }
+
+    var soundAlertVolume: Double {
+        didSet {
+            UserDefaults.standard.set(soundAlertVolume, forKey: Self.soundAlertVolumeKey)
+        }
+    }
+
     var selectedClassificationNames: Set<String> {
         didSet {
             UserDefaults.standard.set(selectedClassificationNames.sorted(), forKey: Self.selectedClassificationsKey)
@@ -271,15 +311,21 @@ final class FrigateMonitor {
     @ObservationIgnored private var hasAuthenticatedSession = false
     @ObservationIgnored private var isLoadingLiveStreamNames = false
     @ObservationIgnored private var hasLoadedLiveStreamNames = false
+    @ObservationIgnored private var alertSoundPlayer: NSSound?
+    @ObservationIgnored private var lastAlertSoundDate: Date?
 
     private static let serverAddressKey = "serverAddress"
     private static let usernameKey = "serverUsername"
     private static let overlayDurationKey = "overlayDurationSeconds"
     private static let feedModeKey = "feedMode"
     private static let popupTriggerKey = "popupTrigger"
+    private static let soundAlertEnabledKey = "soundAlertEnabled"
+    private static let alertSoundKey = "alertSound"
+    private static let soundAlertVolumeKey = "soundAlertVolume"
     private static let selectedClassificationsKey = "selectedClassificationNames"
     private static let defaultServerAddress = "https://192.168.168.168"
     private static let defaultOverlayDurationSeconds = 20.0
+    private static let defaultSoundAlertVolume = 0.6
     private static let defaultSelectedClassificationNames: Set<String> = ["bird", "cat", "bruno"]
     private static let keychainService = "org.tixisbirdview.app.frigate"
 
@@ -288,6 +334,11 @@ final class FrigateMonitor {
         overlayDurationSeconds = savedOverlayDuration > 0 ? savedOverlayDuration : Self.defaultOverlayDurationSeconds
         feedMode = FeedMode(rawValue: UserDefaults.standard.string(forKey: Self.feedModeKey) ?? "") ?? .jpeg
         popupTrigger = PopupTrigger(rawValue: UserDefaults.standard.string(forKey: Self.popupTriggerKey) ?? "") ?? .selectedClassifications
+        isSoundAlertEnabled = UserDefaults.standard.bool(forKey: Self.soundAlertEnabledKey)
+        alertSound = AlertSound(rawValue: UserDefaults.standard.string(forKey: Self.alertSoundKey) ?? "") ?? .purr
+        soundAlertVolume = UserDefaults.standard.object(forKey: Self.soundAlertVolumeKey) == nil
+            ? Self.defaultSoundAlertVolume
+            : UserDefaults.standard.double(forKey: Self.soundAlertVolumeKey)
         selectedClassificationNames = Set(
             (UserDefaults.standard.stringArray(forKey: Self.selectedClassificationsKey)
                 ?? Array(Self.defaultSelectedClassificationNames))
@@ -428,6 +479,10 @@ final class FrigateMonitor {
 
     func dismissOverlay() {
         shouldShowOverlay = false
+    }
+
+    func previewSoundAlert() {
+        playSoundAlert(force: true)
     }
 
     @discardableResult
@@ -592,6 +647,7 @@ final class FrigateMonitor {
                 date: newestItem.activityDate
             )
             shouldShowOverlay = true
+            playSoundAlertIfEnabled()
         }
     }
 
@@ -620,7 +676,35 @@ final class FrigateMonitor {
                 date: newestEvent.startedAt
             )
             shouldShowOverlay = true
+            playSoundAlertIfEnabled()
         }
+    }
+
+    private func playSoundAlertIfEnabled() {
+        guard isSoundAlertEnabled else {
+            return
+        }
+
+        playSoundAlert(force: false)
+    }
+
+    private func playSoundAlert(force: Bool) {
+        let now = Date()
+        if !force,
+           let lastAlertSoundDate,
+           now.timeIntervalSince(lastAlertSoundDate) < 1 {
+            return
+        }
+
+        guard let sound = NSSound(named: NSSound.Name(alertSound.rawValue)) else {
+            return
+        }
+
+        lastAlertSoundDate = now
+        sound.stop()
+        sound.volume = Float(soundAlertVolume)
+        alertSoundPlayer = sound
+        sound.play()
     }
 
     private func isRelevant(event: FrigateEvent) -> Bool {
