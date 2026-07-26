@@ -76,11 +76,11 @@ Open the ![Tixi menu-bar icon](TixisBirdview/Assets.xcassets/TixiMenuBar.imagese
    - **JPEG snapshots**: reliable, updated twice per second.
    - **Live stream**: lower latency go2rtc video when the camera supports it.
 6. Choose **Popup for**:
-   - **Selected classifications**: only checked names open a feed.
+   - **Selected classifications**: only selected names open a feed.
    - **Any tracked object**: every Frigate object event opens a feed.
-7. Add the names you want. Use the refresh icon to retrieve labels and
-   sub-labels Frigate has already seen; you can always add a custom value such
-   as `Tixi` yourself.
+7. Add the names you want. Use the refresh icon, then **Choose…**, to select
+   one or more labels and sub-labels Frigate has already seen. You can always
+   add a custom value such as `Tixi` yourself.
 
 Names are matched against Frigate's event label and sub-label. They are not
 case-sensitive in normal Frigate configurations, but using the spelling shown

@@ -14,6 +14,8 @@ struct SettingsMenuView: View {
     @State private var usernameDraft = ""
     @State private var passwordDraft = ""
     @State private var classificationDraft = ""
+    @State private var isClassificationPickerPresented = false
+    @State private var classificationPickerSelections = Set<String>()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -196,22 +198,21 @@ struct SettingsMenuView: View {
                     ProgressView("Loading classifications…")
                         .controlSize(.small)
                 } else if !availableClassifications.isEmpty {
-                    Text("Available in Frigate")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(availableClassifications, id: \.self) { name in
-                                Toggle(name, isOn: Binding(
-                                    get: { monitor.isClassificationSelected(name) },
-                                    set: { monitor.setClassification(name, isSelected: $0) }
-                                ))
-                                .toggleStyle(.checkbox)
-                            }
+                    HStack {
+                        Text("Available in Frigate")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            classificationPickerSelections = []
+                            isClassificationPickerPresented = true
+                        } label: {
+                            Label("Choose…", systemImage: "checklist")
+                        }
+                        .popover(isPresented: $isClassificationPickerPresented, arrowEdge: .trailing) {
+                            classificationPicker
                         }
                     }
-                    .frame(maxHeight: 130)
                 }
 
                 HStack(spacing: 8) {
@@ -290,6 +291,55 @@ struct SettingsMenuView: View {
 
         monitor.setClassification(classification, isSelected: true)
         classificationDraft = ""
+    }
+
+    private var classificationPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose classifications")
+                .font(.headline)
+
+            Text("Select one or more labels to add.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(availableClassifications, id: \.self) { name in
+                        Toggle(name, isOn: Binding(
+                            get: { classificationPickerSelections.contains(name) },
+                            set: { isSelected in
+                                if isSelected {
+                                    classificationPickerSelections.insert(name)
+                                } else {
+                                    classificationPickerSelections.remove(name)
+                                }
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+            .frame(height: 220)
+
+            HStack {
+                Button("Cancel") {
+                    isClassificationPickerPresented = false
+                }
+
+                Spacer()
+
+                Button("Add selected (\(classificationPickerSelections.count))") {
+                    for classification in classificationPickerSelections {
+                        monitor.setClassification(classification, isSelected: true)
+                    }
+                    classificationPickerSelections = []
+                    isClassificationPickerPresented = false
+                }
+                .disabled(classificationPickerSelections.isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
     }
 
     private var selectedClassifications: [String] {

@@ -11,7 +11,8 @@ versioning when releases are tagged.
 - Menu-bar monitoring for Frigate events and review activity.
 - Temporary non-activating popup feed with event reason, camera, countdown,
   remembered display position, drag control, and resize control.
-- Selectable classifications, including custom labels and Frigate sub-labels.
+- Selectable classifications, including custom labels and Frigate sub-labels;
+  several discovered labels can be selected and added together.
 - JPEG snapshots and authenticated go2rtc MSE live-stream playback.
 - Frigate login support with passwords held in the macOS Keychain.
 - Connection-lost/restored notices and a red menu-bar icon for unavailable
