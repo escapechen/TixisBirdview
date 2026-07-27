@@ -19,6 +19,8 @@ versioning when releases are tagged.
   servers.
 - Optional popup sound alerts with a selectable macOS sound, volume, and
   preview control.
+- Independent, configurable popup and sound cooldowns, each with an enable
+  checkbox and seconds field; manual feed display is unaffected.
 - Build, installation, release, and source-build documentation.
 - A Tixi-inspired app icon and monochrome menu-bar template mark.
 

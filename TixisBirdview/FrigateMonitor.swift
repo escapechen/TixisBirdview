@@ -258,6 +258,46 @@ final class FrigateMonitor {
         }
     }
 
+    var isPopupCooldownEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isPopupCooldownEnabled, forKey: Self.popupCooldownEnabledKey)
+            if !isPopupCooldownEnabled {
+                lastAutomaticPopupDate = nil
+            }
+        }
+    }
+
+    var popupCooldownSeconds: Int {
+        didSet {
+            let validValue = max(1, popupCooldownSeconds)
+            guard validValue == popupCooldownSeconds else {
+                popupCooldownSeconds = validValue
+                return
+            }
+            UserDefaults.standard.set(popupCooldownSeconds, forKey: Self.popupCooldownKey)
+        }
+    }
+
+    var isSoundCooldownEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isSoundCooldownEnabled, forKey: Self.soundCooldownEnabledKey)
+            if !isSoundCooldownEnabled {
+                lastAutomaticSoundDate = nil
+            }
+        }
+    }
+
+    var soundCooldownSeconds: Int {
+        didSet {
+            let validValue = max(1, soundCooldownSeconds)
+            guard validValue == soundCooldownSeconds else {
+                soundCooldownSeconds = validValue
+                return
+            }
+            UserDefaults.standard.set(soundCooldownSeconds, forKey: Self.soundCooldownKey)
+        }
+    }
+
     var selectedClassificationNames: Set<String> {
         didSet {
             UserDefaults.standard.set(selectedClassificationNames.sorted(), forKey: Self.selectedClassificationsKey)
@@ -313,6 +353,8 @@ final class FrigateMonitor {
     @ObservationIgnored private var hasLoadedLiveStreamNames = false
     @ObservationIgnored private var alertSoundPlayer: NSSound?
     @ObservationIgnored private var lastAlertSoundDate: Date?
+    @ObservationIgnored private var lastAutomaticPopupDate: Date?
+    @ObservationIgnored private var lastAutomaticSoundDate: Date?
 
     private static let serverAddressKey = "serverAddress"
     private static let usernameKey = "serverUsername"
@@ -322,10 +364,15 @@ final class FrigateMonitor {
     private static let soundAlertEnabledKey = "soundAlertEnabled"
     private static let alertSoundKey = "alertSound"
     private static let soundAlertVolumeKey = "soundAlertVolume"
+    private static let popupCooldownEnabledKey = "popupCooldownEnabled"
+    private static let popupCooldownKey = "popupCooldownSeconds"
+    private static let soundCooldownEnabledKey = "soundCooldownEnabled"
+    private static let soundCooldownKey = "soundCooldownSeconds"
     private static let selectedClassificationsKey = "selectedClassificationNames"
     private static let defaultServerAddress = "https://192.168.168.168"
     private static let defaultOverlayDurationSeconds = 20.0
     private static let defaultSoundAlertVolume = 0.6
+    private static let defaultCooldownSeconds = 60
     private static let defaultSelectedClassificationNames: Set<String> = ["bird", "cat", "bruno"]
     private static let keychainService = "org.tixisbirdview.app.frigate"
 
@@ -339,6 +386,14 @@ final class FrigateMonitor {
         soundAlertVolume = UserDefaults.standard.object(forKey: Self.soundAlertVolumeKey) == nil
             ? Self.defaultSoundAlertVolume
             : UserDefaults.standard.double(forKey: Self.soundAlertVolumeKey)
+        isPopupCooldownEnabled = UserDefaults.standard.bool(forKey: Self.popupCooldownEnabledKey)
+        popupCooldownSeconds = UserDefaults.standard.object(forKey: Self.popupCooldownKey) == nil
+            ? Self.defaultCooldownSeconds
+            : max(1, UserDefaults.standard.integer(forKey: Self.popupCooldownKey))
+        isSoundCooldownEnabled = UserDefaults.standard.bool(forKey: Self.soundCooldownEnabledKey)
+        soundCooldownSeconds = UserDefaults.standard.object(forKey: Self.soundCooldownKey) == nil
+            ? Self.defaultCooldownSeconds
+            : max(1, UserDefaults.standard.integer(forKey: Self.soundCooldownKey))
         selectedClassificationNames = Set(
             (UserDefaults.standard.stringArray(forKey: Self.selectedClassificationsKey)
                 ?? Array(Self.defaultSelectedClassificationNames))
@@ -640,14 +695,14 @@ final class FrigateMonitor {
         let isRecent = Date().timeIntervalSince(newestItem.activityDate) < 120
         if isNewItem && isRecent {
             lastEventDescription = newestItem.displayDescription
-            overlayActivity = OverlayActivity(
-                title: newestItem.data.bestObjectDescription,
-                confidence: nil,
-                camera: newestItem.camera,
-                date: newestItem.activityDate
+            presentAutomaticAlert(
+                OverlayActivity(
+                    title: newestItem.data.bestObjectDescription,
+                    confidence: nil,
+                    camera: newestItem.camera,
+                    date: newestItem.activityDate
+                )
             )
-            shouldShowOverlay = true
-            playSoundAlertIfEnabled()
         }
     }
 
@@ -669,15 +724,39 @@ final class FrigateMonitor {
         let isNewEvent = seenEventIDs.insert(newestEvent.id).inserted
         let isRecent = Date().timeIntervalSince(newestEvent.startedAt) < 90
         if isNewEvent && isRecent {
-            overlayActivity = OverlayActivity(
-                title: newestEvent.displayLabel,
-                confidence: newestEvent.confidenceDescription,
-                camera: newestEvent.camera,
-                date: newestEvent.startedAt
+            presentAutomaticAlert(
+                OverlayActivity(
+                    title: newestEvent.displayLabel,
+                    confidence: newestEvent.confidenceDescription,
+                    camera: newestEvent.camera,
+                    date: newestEvent.startedAt
+                )
             )
-            shouldShowOverlay = true
-            playSoundAlertIfEnabled()
         }
+    }
+
+    private func presentAutomaticAlert(_ activity: OverlayActivity) {
+        if shouldShowAutomaticPopup() {
+            overlayActivity = activity
+            shouldShowOverlay = true
+        }
+
+        playSoundAlertIfEnabled()
+    }
+
+    private func shouldShowAutomaticPopup() -> Bool {
+        guard isPopupCooldownEnabled else {
+            return true
+        }
+
+        let now = Date()
+        if let lastAutomaticPopupDate,
+           now.timeIntervalSince(lastAutomaticPopupDate) < TimeInterval(popupCooldownSeconds) {
+            return false
+        }
+
+        lastAutomaticPopupDate = now
+        return true
     }
 
     private func playSoundAlertIfEnabled() {
@@ -685,26 +764,40 @@ final class FrigateMonitor {
             return
         }
 
-        playSoundAlert(force: false)
+        let now = Date()
+        if isSoundCooldownEnabled,
+           let lastAutomaticSoundDate,
+           now.timeIntervalSince(lastAutomaticSoundDate) < TimeInterval(soundCooldownSeconds) {
+            return
+        }
+
+        guard playSoundAlert(force: false) else {
+            return
+        }
+
+        if isSoundCooldownEnabled {
+            lastAutomaticSoundDate = now
+        }
     }
 
-    private func playSoundAlert(force: Bool) {
+    @discardableResult
+    private func playSoundAlert(force: Bool) -> Bool {
         let now = Date()
         if !force,
            let lastAlertSoundDate,
            now.timeIntervalSince(lastAlertSoundDate) < 1 {
-            return
+            return false
         }
 
         guard let sound = NSSound(named: NSSound.Name(alertSound.rawValue)) else {
-            return
+            return false
         }
 
         lastAlertSoundDate = now
         sound.stop()
         sound.volume = Float(soundAlertVolume)
         alertSoundPlayer = sound
-        sound.play()
+        return sound.play()
     }
 
     private func isRelevant(event: FrigateEvent) -> Bool {

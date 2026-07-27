@@ -21,7 +21,8 @@ High reasoning).
   `person`, `cat`, or `Tixi`.
 - Shows the detected label, confidence, camera, a countdown, and either JPEG
   snapshots or a low-latency go2rtc live stream.
-- Offers optional popup sound alerts with a selectable macOS sound and volume.
+- Offers optional popup sound alerts with a selectable macOS sound and volume,
+  plus independent popup and sound cooldowns.
 - Keeps the password in the macOS Keychain and uses normal TLS certificate
   validation.
 - Remembers the feed's width and display position, then adapts its height to
@@ -70,15 +71,18 @@ Open the ![Tixi menu-bar icon](TixisBirdview/Assets.xcassets/TixiMenuBar.imagese
 2. If Frigate uses login, enter the username and password. The password goes
    into your macOS Keychain; it is not written to TixisBirdview's preferences.
 3. Set **Keep feed open** to the number of seconds you want the popup visible.
-4. Optionally enable **Sound alert**, select a sound, set its volume, and use
+4. Optionally enable **Popup cooldown** and/or **Sound cooldown**, then enter
+   the number of seconds to suppress each type of repeated automatic alert.
+   Manual **Show Feed** remains immediate.
+5. Optionally enable **Sound alert**, select a sound, set its volume, and use
    **Preview** to test it.
-5. Choose a feed mode:
+6. Choose a feed mode:
    - **JPEG snapshots**: reliable, updated twice per second.
    - **Live stream**: lower latency go2rtc video when the camera supports it.
-6. Choose **Popup for**:
+7. Choose **Popup for**:
    - **Selected classifications**: only selected names open a feed.
    - **Any tracked object**: every Frigate object event opens a feed.
-7. Add the names you want. Use the refresh icon, then **Choose…**, to select
+8. Add the names you want. Use the refresh icon, then **Choose…**, to select
    one or more labels and sub-labels Frigate has already seen. You can always
    add a custom value such as `Tixi` yourself.
 

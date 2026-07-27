@@ -99,6 +99,7 @@ struct SettingsMenuView: View {
                 Text("Keep feed open: \(Int(monitor.overlayDurationSeconds)) seconds")
             }
 
+            popupCooldownSettings
             soundAlertSettings
 
             Picker("Feed", selection: $monitor.feedMode) {
@@ -143,6 +144,44 @@ struct SettingsMenuView: View {
                         .frame(width: 36, alignment: .trailing)
                 }
                 .font(.caption)
+
+                soundCooldownSettings
+            }
+        }
+    }
+
+    private var popupCooldownSettings: some View {
+        cooldownSettings(
+            title: "Popup cooldown",
+            isEnabled: $monitor.isPopupCooldownEnabled,
+            seconds: $monitor.popupCooldownSeconds
+        )
+    }
+
+    private var soundCooldownSettings: some View {
+        cooldownSettings(
+            title: "Sound cooldown",
+            isEnabled: $monitor.isSoundCooldownEnabled,
+            seconds: $monitor.soundCooldownSeconds
+        )
+    }
+
+    private func cooldownSettings(
+        title: String,
+        isEnabled: Binding<Bool>,
+        seconds: Binding<Int>
+    ) -> some View {
+        HStack(spacing: 8) {
+            Toggle(title, isOn: isEnabled)
+
+            if isEnabled.wrappedValue {
+                TextField("Seconds", value: seconds, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 64)
+                Text("seconds")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
