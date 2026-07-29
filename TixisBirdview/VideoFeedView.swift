@@ -19,6 +19,7 @@ struct VideoFeedView: View {
     @State private var frameTask: Task<Void, Never>?
     @State private var loadError: String?
     @State private var streamError: String?
+    @State private var isUsingJPEGFallback = false
     @State private var isActivityBadgeVisible = false
 
     var body: some View {
@@ -35,20 +36,37 @@ struct VideoFeedView: View {
             animateActivityBadge()
         }
         .onChange(of: monitor.feedMode) {
+            isUsingJPEGFallback = false
             updateFeedMode()
         }
         .onChange(of: monitor.overlayPresentationID) {
+            isUsingJPEGFallback = false
+            updateFeedMode()
             animateActivityBadge()
+        }
+        .onChange(of: monitor.streamSessionID) {
+            isUsingJPEGFallback = false
+            updateFeedMode()
         }
         .onDisappear(perform: stopLoadingFrames)
     }
 
     @ViewBuilder
     private var content: some View {
-        switch monitor.feedMode {
-        case .jpeg:
+        if showsJPEG {
             jpegContent
-        case .stream:
+                .overlay(alignment: .center) {
+                    if isUsingJPEGFallback {
+                        Text("Live stream unavailable. Showing JPEG snapshots.")
+                            .font(.callout)
+                            .foregroundStyle(.white.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(12)
+                            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .padding()
+                    }
+                }
+        } else {
             let streamName = monitor.currentFeedStreamName
             FrigateMSEStreamView(
                 serverURL: monitor.baseURL,
@@ -57,7 +75,8 @@ struct VideoFeedView: View {
                 sessionID: monitor.streamSessionID,
                 errorMessage: $streamError,
                 onAspectRatioChanged: onAspectRatioChanged,
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                onFallbackToJPEG: switchToJPEGFallback
             )
             .id("\(monitor.serverAddress)|\(streamName)|\(monitor.streamSessionID.uuidString)")
             .overlay(alignment: .center) {
@@ -172,7 +191,7 @@ struct VideoFeedView: View {
     }
 
     private func startLoadingFrames() {
-        guard monitor.feedMode == .jpeg, frameTask == nil else {
+        guard showsJPEG, frameTask == nil else {
             return
         }
 
@@ -195,16 +214,29 @@ struct VideoFeedView: View {
     }
 
     private func updateFeedMode() {
-        switch monitor.feedMode {
-        case .jpeg:
+        if showsJPEG {
             streamError = nil
             startLoadingFrames()
-        case .stream:
+        } else {
             stopLoadingFrames()
             frameImage = nil
             loadError = nil
             streamError = nil
         }
+    }
+
+    private var showsJPEG: Bool {
+        monitor.feedMode == .jpeg || isUsingJPEGFallback
+    }
+
+    private func switchToJPEGFallback() {
+        guard monitor.feedMode == .stream, !isUsingJPEGFallback else {
+            return
+        }
+
+        isUsingJPEGFallback = true
+        streamError = nil
+        startLoadingFrames()
     }
 
     private func animateActivityBadge() {

@@ -18,8 +18,10 @@ final class SettingsWindowController {
     }
 
     func show() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
         if let window {
-            NSApp.activate()
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -37,8 +39,6 @@ final class SettingsWindowController {
 
         self.window = window
 
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
 }
