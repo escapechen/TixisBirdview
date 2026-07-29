@@ -16,7 +16,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let onDockIconPreferenceChanged: (Bool) -> Void
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let menu = NSMenu()
-    private let connectionPopover = NSPopover()
+    private let connectionNoticePanel = makeConnectionNoticePanel()
     private static let dockIconPreferenceKey = "showDockIcon"
     private var lastConnectionState: FrigateMonitor.ConnectionState?
     private var connectionDismissalTask: Task<Void, Never>?
@@ -223,14 +223,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         systemImage: String,
         tint: Color
     ) {
-        guard let button = statusItem.button else {
-            return
-        }
-
         connectionDismissalTask?.cancel()
-        connectionPopover.performClose(nil)
-        connectionPopover.behavior = .transient
-        connectionPopover.contentViewController = NSHostingController(
+        connectionNoticePanel.orderOut(nil)
+        connectionNoticePanel.contentViewController = NSHostingController(
             rootView: ConnectionNoticeView(
                 title: title,
                 message: message,
@@ -238,7 +233,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 tint: tint
             )
         )
-        connectionPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        connectionNoticePanel.setContentSize(NSSize(width: 284, height: 88))
+
+        let screen = statusItem.button?.window?.screen ?? NSScreen.main
+        if let visibleFrame = screen?.visibleFrame {
+            let noticeFrame = connectionNoticePanel.frame
+            connectionNoticePanel.setFrameOrigin(
+                NSPoint(
+                    x: visibleFrame.maxX - noticeFrame.width - 16,
+                    y: visibleFrame.maxY - noticeFrame.height - 16
+                )
+            )
+        }
+        connectionNoticePanel.orderFrontRegardless()
 
         connectionDismissalTask = Task { [weak self] in
             do {
@@ -247,8 +254,25 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 return
             }
 
-            self?.connectionPopover.performClose(nil)
+            self?.connectionNoticePanel.orderOut(nil)
         }
+    }
+
+    private static func makeConnectionNoticePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 284, height: 88),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        return panel
     }
 }
 
@@ -290,5 +314,7 @@ private struct ConnectionNoticeView: View {
         }
         .frame(width: 260, alignment: .leading)
         .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
     }
 }
