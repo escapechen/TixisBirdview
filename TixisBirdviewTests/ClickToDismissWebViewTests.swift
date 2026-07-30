@@ -238,6 +238,17 @@ final class MqttEventToOverlayTests: XCTestCase {
 }
 
 final class FeedPlaybackStateTests: XCTestCase {
+    func testLiveMSELatencyPolicyPrioritizesFreshFrames() {
+        XCTAssertLessThanOrEqual(LiveStreamLatencyPolicy.maximumBufferedSeconds, 1.5)
+        XCTAssertLessThan(LiveStreamLatencyPolicy.retainedBufferedSeconds, LiveStreamLatencyPolicy.maximumBufferedSeconds)
+        XCTAssertLessThan(LiveStreamLatencyPolicy.targetLatencySeconds, LiveStreamLatencyPolicy.retainedBufferedSeconds)
+        XCTAssertLessThanOrEqual(
+            LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds,
+            LiveStreamLatencyPolicy.maximumBufferedSeconds
+        )
+        XCTAssertGreaterThan(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate, 1)
+    }
+
     func testStreamStartsAsJPEGBeforeMSEBecomesPlayable() {
         let state = FeedPlaybackState.make(
             feedMode: .stream,

@@ -7,6 +7,16 @@
 import SwiftUI
 import WebKit
 
+enum LiveStreamLatencyPolicy {
+    /// Alert overlays favour freshness over smoothing through a weak connection.
+    static let maximumBufferedSeconds = 1.5
+    static let retainedBufferedSeconds = 0.75
+    static let targetLatencySeconds = 0.35
+    static let softCatchUpThresholdSeconds = 0.75
+    static let hardCatchUpThresholdSeconds = 1.5
+    static let maximumCatchUpPlaybackRate = 1.25
+}
+
 struct FrigateMSEStreamView: NSViewRepresentable {
     let serverURL: URL?
     let cameraName: String
@@ -102,8 +112,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             const startupTimeoutMs = \(min(15, max(1, startupTimeoutSeconds)) * 1000);
             const debugEnabled = \(debugEnabled ? "true" : "false");
             const codecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
-            const maxBufferSeconds = 4;
-            const keepBufferSeconds = 2.5;
+            const maxBufferSeconds = \(LiveStreamLatencyPolicy.maximumBufferedSeconds);
+            const keepBufferSeconds = \(LiveStreamLatencyPolicy.retainedBufferedSeconds);
+            const targetLatencySeconds = \(LiveStreamLatencyPolicy.targetLatencySeconds);
+            const softCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.softCatchUpThresholdSeconds);
+            const hardCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds);
+            const maximumCatchUpPlaybackRate = \(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate);
             const maxPendingBytes = 2 * 1024 * 1024;
             const reconnectDelay = 1500;
             var socket;
@@ -207,6 +221,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               if (video.src) URL.revokeObjectURL(video.src);
               video.removeAttribute("src");
               video.srcObject = null;
+              video.playbackRate = 1;
               video.load();
             }
 
@@ -233,11 +248,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             function trimBuffer() {
               if (!sourceBuffer || sourceBuffer.updating || !sourceBuffer.buffered.length) return false;
+              keepNearLiveEdge();
               const ranges = sourceBuffer.buffered;
               const start = ranges.start(0);
               const end = ranges.end(ranges.length - 1);
               if (end - start <= maxBufferSeconds) return false;
-              const removeEnd = Math.max(start, end - keepBufferSeconds);
+              const removeEnd = Math.min(video.currentTime - 0.05, end - keepBufferSeconds);
               if (removeEnd <= start + 0.05) return false;
               sourceBuffer.remove(start, removeEnd);
               return true;
@@ -281,8 +297,23 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             function keepNearLiveEdge() {
               if (!sourceBuffer?.buffered.length || !Number.isFinite(video.currentTime)) return;
               const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-              if (end - video.currentTime > maxBufferSeconds) {
-                video.currentTime = Math.max(0, end - 0.5);
+              const start = Math.max(0, end - maxBufferSeconds);
+              const gap = end - video.currentTime;
+              try {
+                mediaSource?.setLiveSeekableRange?.(start, end);
+              } catch (_) {
+                // ManagedMediaSource availability differs across supported macOS releases.
+              }
+              if (gap > hardCatchUpThresholdSeconds) {
+                video.currentTime = Math.max(0, end - targetLatencySeconds);
+                video.playbackRate = 1;
+              } else if (gap > softCatchUpThresholdSeconds) {
+                video.playbackRate = Math.min(
+                  maximumCatchUpPlaybackRate,
+                  1 + (gap - targetLatencySeconds) * 0.2
+                );
+              } else if (video.playbackRate !== 1) {
+                video.playbackRate = 1;
               }
             }
 
