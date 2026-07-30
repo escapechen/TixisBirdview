@@ -194,6 +194,13 @@ struct VideoFeedView: View {
                         .frame(width: 32, height: 28)
                         .accessibilityLabel("Move feed window")
                         .help("Drag to move feed")
+
+                    WindowDismissButton {
+                        monitor.dismissOverlay()
+                    }
+                    .frame(width: 32, height: 28)
+                    .accessibilityLabel("Close feed")
+                    .help("Close feed")
                 }
                 .padding(8)
             }
@@ -492,6 +499,46 @@ private struct WindowZoomButton: NSViewRepresentable {
 
         override func mouseUp(with event: NSEvent) {
             super.mouseUp(with: event)
+        }
+    }
+}
+
+struct WindowDismissButton: NSViewRepresentable {
+    let dismiss: () -> Void
+
+    func makeNSView(context: Context) -> DismissView {
+        DismissView(dismiss: dismiss)
+    }
+
+    func updateNSView(_ nsView: DismissView, context: Context) {
+        nsView.dismiss = dismiss
+    }
+
+    final class DismissView: NSButton {
+        var dismiss: () -> Void
+
+        init(dismiss: @escaping () -> Void) {
+            self.dismiss = dismiss
+            super.init(frame: .zero)
+            configure(symbolName: "xmark", label: "Close feed")
+            target = self
+            action = #selector(closeFeed)
+        }
+
+        required init?(coder: NSCoder) {
+            dismiss = {}
+            super.init(coder: coder)
+            configure(symbolName: "xmark", label: "Close feed")
+            target = self
+            action = #selector(closeFeed)
+        }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+            true
+        }
+
+        @objc private func closeFeed() {
+            dismiss()
         }
     }
 }

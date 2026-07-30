@@ -75,13 +75,13 @@ compatible choice and remain available if live video is unavailable.
 
 Open the ![Tixi menu-bar icon](TixisBirdview/Assets.xcassets/TixiMenuBar.imageset/tixi-menu-18@2x.png) icon in the menu bar, then choose **Settings**.
 
-Settings are grouped into three tabs. These screenshots use only example
+Settings are grouped into three native toolbar panes. These screenshots use only example
 addresses and no real credentials.
 
 <p align="center">
-  <img src="docs/settings-connection-mqtt.png" alt="Connection tab with MQTT broker settings" width="31%">
-  <img src="docs/settings-feed-sound.png" alt="Feed and Sound tab" width="31%">
-  <img src="docs/settings-popup-triggers.png" alt="Popup Triggers tab" width="31%">
+  <img src="docs/settings-connection-mqtt.png" alt="Connection settings pane with MQTT broker settings" width="31%">
+  <img src="docs/settings-feed-sound.png" alt="Feed and Sound settings pane" width="31%">
+  <img src="docs/settings-popup-triggers.png" alt="Popup Triggers settings pane" width="31%">
 </p>
 
 1. On **Connection**, enter the Frigate server URL and choose **Apply**. If
@@ -141,7 +141,7 @@ filters them by their object classification.
 
 | Problem | What to check |
 | --- | --- |
-| Menu-bar icon is red | Confirm the URL, Frigate availability, macOS TLS trust, and login details. When using MQTT, also check the Connection tab's delivery status and broker settings. TixisBirdview shows a short connection-lost/restored message when the state changes. |
+| Menu-bar icon is red | Confirm the URL, Frigate availability, macOS TLS trust, and login details. When using MQTT, also check the Connection pane's delivery status and broker settings. TixisBirdview shows a short connection-lost/restored message when the state changes. |
 | No popup | Make sure monitoring is not paused. Temporarily select **Any tracked object**, then check the status line for the last activity Frigate sent. With MQTT selected, use **Verify** in the Connection tab first. |
 | A name never triggers | Add the exact event label or sub-label shown in Frigate. A Birdseye image without a new event does not count. |
 | Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream. JPEG is loaded immediately while MSE keeps connecting in the background; reduce **Retry live player after** to retry sooner. |

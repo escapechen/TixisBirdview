@@ -63,6 +63,10 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
   to matching-camera popup routing, JPEG-preview to playable-MSE transition,
   one-click dismissal, and a permanently non-key/non-main overlay. Tests must
   remain local and must not need real credentials, cameras, or a broker.
+- Every new or changed user-visible behavior needs focused automated coverage
+  in the same change. If a behavior can’t be meaningfully automated (for
+  example, a system-provided visual treatment), add the smallest testable
+  contract and document the required manual check in the handoff.
 
 - Debug build:
 

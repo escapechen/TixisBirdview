@@ -6,10 +6,46 @@
 //
 
 import AppKit
+import Observation
 import SwiftUI
+
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case connection
+    case feedAndSound
+    case popupTriggers
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .connection: "Connection"
+        case .feedAndSound: "Feed & Sound"
+        case .popupTriggers: "Popup Triggers"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .connection: "network"
+        case .feedAndSound: "video"
+        case .popupTriggers: "bell.badge"
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class SettingsPaneSelection {
+    var selected: SettingsPane
+
+    init(selected: SettingsPane) {
+        self.selected = selected
+    }
+}
 
 struct SettingsMenuView: View {
     @Bindable var monitor: FrigateMonitor
+    @Bindable var paneSelection: SettingsPaneSelection
     @State private var serverAddressDraft = ""
     @State private var usernameDraft = ""
     @State private var passwordDraft = ""
@@ -22,25 +58,10 @@ struct SettingsMenuView: View {
     @State private var classificationDraft = ""
     @State private var isClassificationPickerPresented = false
     @State private var classificationPickerSelections = Set<String>()
-    @State private var selectedSettingsTab = SettingsTab.connection
-
-    private enum SettingsTab: Hashable {
-        case connection
-        case feedAndSound
-        case popupTriggers
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            Divider()
+        VStack(spacing: 0) {
             settings
-            Divider()
-            status
-            Divider()
-            controls
         }
-        .padding(16)
         .onAppear {
             serverAddressDraft = monitor.serverAddress
             usernameDraft = monitor.username
@@ -55,63 +76,34 @@ struct SettingsMenuView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: monitor.connectionState.menuSystemImage)
-                .foregroundStyle(monitor.connectionState.tint)
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("TixisBirdview")
-                    .font(.headline)
-                Text(monitor.isMonitoring ? "Monitoring bird activity" : "Paused")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private var settings: some View {
-        TabView(selection: $selectedSettingsTab) {
-            ScrollView {
-                connectionSettings
+        ScrollView {
+            Group {
+                switch paneSelection.selected {
+                case .connection:
+                    connectionSettings
+                case .feedAndSound:
+                    feedAndSoundSettings
+                case .popupTriggers:
+                    popupTriggerSettings
+                }
             }
-            .tabItem {
-                Label("Connection", systemImage: "network")
-            }
-            .tag(SettingsTab.connection)
-
-            ScrollView {
-                feedAndSoundSettings
-            }
-            .tabItem {
-                Label("Feed & Sound", systemImage: "video")
-            }
-            .tag(SettingsTab.feedAndSound)
-
-            ScrollView {
-                popupTriggerSettings
-            }
-            .tabItem {
-                Label("Popup Triggers", systemImage: "bell.badge")
-            }
-            .tag(SettingsTab.popupTriggers)
+            .padding(20)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var connectionSettings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            settingsCard(title: "Frigate connection", systemImage: "video") {
+        VStack(alignment: .leading, spacing: 16) {
+            settingsGroup(title: "Frigate connection", systemImage: "video") {
                 frigateConnectionSettings
             }
 
-            settingsCard(title: "Event delivery", systemImage: "bolt.horizontal.circle") {
+            settingsGroup(title: "Event delivery", systemImage: "bolt.horizontal.circle") {
                 eventDeliverySettings
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 2)
-        .padding(.vertical, 8)
     }
 
     private var frigateConnectionSettings: some View {
@@ -160,59 +152,57 @@ struct SettingsMenuView: View {
     }
 
     private var feedAndSoundSettings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Feed")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            settingsGroup(title: "Feed", systemImage: "video") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Stepper(value: $monitor.overlayDurationSeconds, in: 5...120, step: 5) {
+                        Text("Keep feed open: \(Int(monitor.overlayDurationSeconds)) seconds")
+                    }
 
-            Stepper(value: $monitor.overlayDurationSeconds, in: 5...120, step: 5) {
-                Text("Keep feed open: \(Int(monitor.overlayDurationSeconds)) seconds")
-            }
+                    Picker("Feed", selection: $monitor.feedMode) {
+                        ForEach(FrigateMonitor.FeedMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
 
-            Picker("Feed", selection: $monitor.feedMode) {
-                ForEach(FrigateMonitor.FeedMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+                    Text(monitor.feedMode.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if monitor.feedMode == .stream {
+                        Stepper(value: $monitor.liveStartupTimeoutSeconds, in: 1...15) {
+                            Text("Retry live player after: \(monitor.liveStartupTimeoutSeconds) seconds")
+                        }
+                        .help("JPEG stays visible while live video retries in the background. This is how long a live attempt gets to produce a frame before it reconnects.")
+
+                        Text("JPEG starts loading immediately while live video connects.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Write live-player diagnostics to terminal output", isOn: $monitor.isLiveDebugEnabled)
+                            .help("Writes concise playback state transitions to the terminal where TixisBirdview was started. It excludes server addresses, camera names, credentials, cookies, and tokens.")
+                    }
                 }
             }
-            .pickerStyle(.radioGroup)
 
-            Text(monitor.feedMode.detail)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            if monitor.feedMode == .stream {
-                Stepper(value: $monitor.liveStartupTimeoutSeconds, in: 1...15) {
-                    Text("Retry live player after: \(monitor.liveStartupTimeoutSeconds) seconds")
-                }
-                .help("JPEG stays visible while live video retries in the background. This is how long a live attempt gets to produce a frame before it reconnects.")
-
-                Text("JPEG starts loading immediately while live video connects.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Write live-player diagnostics to terminal output", isOn: $monitor.isLiveDebugEnabled)
-                    .help("Writes concise playback state transitions to the terminal where TixisBirdview was started. It excludes server addresses, camera names, credentials, cookies, and tokens.")
+            settingsGroup(title: "Sound alerts", systemImage: "speaker.wave.2") {
+                soundAlertSettings
             }
-
-            Divider()
-
-            Text("Sound alerts")
-                .font(.headline)
-
-            soundAlertSettings
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 2)
-        .padding(.vertical, 8)
     }
 
     private var popupTriggerSettings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            popupCooldownSettings
-            classificationSettings
+        VStack(alignment: .leading, spacing: 16) {
+            settingsGroup(title: "Popup behavior", systemImage: "bell") {
+                popupCooldownSettings
+            }
+            settingsGroup(title: "Classifications", systemImage: "line.3.horizontal.decrease.circle") {
+                classificationSettings
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 2)
-        .padding(.vertical, 8)
     }
 
     private var eventDeliverySettings: some View {
@@ -299,25 +289,22 @@ struct SettingsMenuView: View {
         }
     }
 
-    private func settingsCard<Content: View>(
+    private func settingsGroup<Content: View>(
         title: String,
         systemImage: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        } label: {
             Label(title, systemImage: systemImage)
                 .font(.headline)
-                .foregroundStyle(.primary)
-
-            content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.48), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
-        }
     }
 
     private var soundAlertSettings: some View {
@@ -475,43 +462,6 @@ struct SettingsMenuView: View {
         }
     }
 
-    private var status: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(monitor.connectionState.title, systemImage: monitor.connectionState.menuSystemImage)
-                .foregroundStyle(monitor.connectionState.tint)
-                .lineLimit(3)
-                .textSelection(.enabled)
-
-            Text(monitor.lastEventDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .textSelection(.enabled)
-        }
-    }
-
-    private var controls: some View {
-        HStack {
-            Button {
-                monitor.toggleMonitoring()
-            } label: {
-                Label(monitor.isMonitoring ? "Pause" : "Start", systemImage: monitor.isMonitoring ? "pause.fill" : "play.fill")
-            }
-
-            Button {
-                monitor.showOverlayForLatestEvent()
-            } label: {
-                Label("Show Feed", systemImage: "rectangle.on.rectangle")
-            }
-
-            Spacer()
-
-            Button("Quit") {
-                NSApp.terminate(nil)
-            }
-        }
-    }
-
     private func applySettings() {
         if monitor.applyConnectionSettings(
             serverAddressDraft,
@@ -635,5 +585,8 @@ private extension FrigateMonitor.ConnectionState {
 }
 
 #Preview {
-    SettingsMenuView(monitor: FrigateMonitor())
+    SettingsMenuView(
+        monitor: FrigateMonitor(),
+        paneSelection: SettingsPaneSelection(selected: .connection)
+    )
 }

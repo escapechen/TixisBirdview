@@ -105,10 +105,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         aboutItem.target = self
         menu.addItem(aboutItem)
 
-        let serverItem = NSMenuItem(title: "Server: \(monitor.serverAddress)", action: nil, keyEquivalent: "")
-        serverItem.isEnabled = false
-        menu.addItem(serverItem)
-
         let durationItem = NSMenuItem(title: "Keep Feed Open", action: nil, keyEquivalent: "")
         durationItem.submenu = durationMenu()
         menu.addItem(durationItem)
@@ -210,7 +206,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         } else if wasFailed, !newState.isFailure, case .connected = newState {
             showConnectionNotice(
                 title: "Connection restored",
-                message: monitor.serverAddress,
+                message: "Frigate is reachable again.",
                 systemImage: "wifi",
                 tint: .green
             )

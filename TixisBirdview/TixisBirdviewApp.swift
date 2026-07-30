@@ -97,13 +97,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.applicationIconImage = iconImage
     }
 
-    private func configureMainMenu(
+    func configureMainMenu(
         settingsWindowController: SettingsWindowController,
         aboutWindowController: AboutWindowController
     ) {
         let mainMenu = NSMenu()
-        let appMenuItem = NSMenuItem()
-        let appMenu = NSMenu()
+        let appMenuItem = NSMenuItem(title: "TixisBirdview", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "TixisBirdview")
 
         appMenu.addItem(
             NSMenuItem(
@@ -120,6 +120,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         appMenu.addItem(.separator())
+        let hideItem = NSMenuItem(
+            title: "Hide TixisBirdview",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        hideItem.target = NSApp
+        appMenu.addItem(hideItem)
+
+        let hideOthersItem = NSMenuItem(
+            title: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        hideOthersItem.target = NSApp
+        appMenu.addItem(hideOthersItem)
+
+        let showAllItem = NSMenuItem(
+            title: "Show All",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        )
+        showAllItem.target = NSApp
+        appMenu.addItem(showAllItem)
+        appMenu.addItem(.separator())
         let quitItem = NSMenuItem(
             title: "Quit TixisBirdview",
             action: #selector(NSApplication.terminate(_:)),
@@ -129,12 +154,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(quitItem)
 
         appMenu.items
-            .filter { $0.action != #selector(NSApplication.terminate(_:)) }
+            .filter {
+                $0.action == #selector(showAbout) || $0.action == #selector(showSettings)
+            }
             .forEach { $0.target = self }
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        let editMenuItem = NSMenuItem()
+        let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
         editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))

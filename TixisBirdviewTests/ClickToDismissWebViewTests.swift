@@ -282,3 +282,53 @@ final class FeedPlaybackStateTests: XCTestCase {
         XCTAssertFalse(hidden.mountsMSEPlayer)
     }
 }
+
+@MainActor
+final class HIGInteractionTests: XCTestCase {
+    func testApplicationMenuOffersStandardSettingsAndVisibilityCommands() throws {
+        let delegate = AppDelegate()
+        let monitor = FrigateMonitor()
+        delegate.configureMainMenu(
+            settingsWindowController: SettingsWindowController(monitor: monitor),
+            aboutWindowController: AboutWindowController()
+        )
+
+        let appMenu = try XCTUnwrap(NSApp.mainMenu?.item(at: 0)?.submenu)
+        let titles = appMenu.items.map(\.title)
+
+        XCTAssertTrue(titles.contains("About TixisBirdview"))
+        XCTAssertTrue(titles.contains("Settings..."))
+        XCTAssertTrue(titles.contains("Hide TixisBirdview"))
+        XCTAssertTrue(titles.contains("Hide Others"))
+        XCTAssertTrue(titles.contains("Show All"))
+        XCTAssertTrue(titles.contains("Quit TixisBirdview"))
+    }
+
+    func testVisibleCloseControlDismissesWithoutTakingFocus() {
+        var dismissalCount = 0
+        let button = WindowDismissButton.DismissView {
+            dismissalCount += 1
+        }
+
+        button.performClick(nil)
+
+        XCTAssertEqual(dismissalCount, 1)
+        XCTAssertTrue(button.acceptsFirstMouse(for: nil))
+    }
+
+    func testSettingsPanesHaveStableNativeToolbarMetadata() {
+        XCTAssertEqual(SettingsPane.allCases.map(\.rawValue), ["connection", "feedAndSound", "popupTriggers"])
+        XCTAssertEqual(SettingsPane.connection.title, "Connection")
+        XCTAssertEqual(SettingsPane.feedAndSound.title, "Feed & Sound")
+        XCTAssertEqual(SettingsPane.popupTriggers.title, "Popup Triggers")
+        XCTAssertEqual(SettingsPane.connection.systemImage, "network")
+    }
+
+    func testSettingsPaneSelectionUpdatesTheVisiblePane() {
+        let selection = SettingsPaneSelection(selected: .connection)
+
+        selection.selected = .popupTriggers
+
+        XCTAssertEqual(selection.selected, .popupTriggers)
+    }
+}
