@@ -20,12 +20,15 @@ struct VideoFeedView: View {
     @State private var loadError: String?
     @State private var streamError: String?
     @State private var isUsingJPEGFallback = false
+    @State private var isLiveStreamReady = false
+    @State private var liveStatus = "connecting"
     @State private var isActivityBadgeVisible = false
 
     var body: some View {
         ZStack {
             content
             activityBadge
+            streamBadges
             overlayControls
         }
         .frame(minWidth: 240, minHeight: 150)
@@ -37,23 +40,77 @@ struct VideoFeedView: View {
         }
         .onChange(of: monitor.feedMode) {
             isUsingJPEGFallback = false
+            isLiveStreamReady = false
+            liveStatus = "connecting"
+            streamError = nil
             updateFeedMode()
         }
         .onChange(of: monitor.overlayPresentationID) {
             isUsingJPEGFallback = false
+            isLiveStreamReady = false
+            liveStatus = "connecting"
+            streamError = nil
             updateFeedMode()
             animateActivityBadge()
         }
         .onChange(of: monitor.streamSessionID) {
             isUsingJPEGFallback = false
+            isLiveStreamReady = false
+            liveStatus = "connecting"
+            streamError = nil
             updateFeedMode()
+        }
+        .onChange(of: streamError) {
+            if streamError != nil, monitor.feedMode == .stream, !isUsingJPEGFallback {
+                isLiveStreamReady = false
+                liveStatus = "retrying"
+                updateFeedMode()
+            }
         }
         .onDisappear(perform: stopLoadingFrames)
     }
 
     @ViewBuilder
     private var content: some View {
-        if showsJPEG {
+        if monitor.feedMode == .stream, !isUsingJPEGFallback {
+            ZStack {
+                jpegContent
+
+                FrigateMSEStreamView(
+                    serverURL: monitor.baseURL,
+                    cameraName: monitor.currentFeedStreamName,
+                    cookies: monitor.authenticationCookies(),
+                    sessionID: monitor.streamSessionID,
+                    startupTimeoutSeconds: monitor.liveStartupTimeoutSeconds,
+                    debugEnabled: monitor.isLiveDebugEnabled,
+                    errorMessage: $streamError,
+                    onAspectRatioChanged: onAspectRatioChanged,
+                    onDismiss: onDismiss,
+                    onConnected: {
+                        isLiveStreamReady = true
+                        liveStatus = "playing"
+                        streamError = nil
+                        updateFeedMode()
+                    },
+                    onFallbackToJPEG: switchToJPEGFallback,
+                    onStatusChanged: { status in
+                        liveStatus = status
+                    }
+                )
+                .id("\(monitor.serverAddress)|\(monitor.currentFeedStreamName)|\(monitor.streamSessionID.uuidString)|\(monitor.liveStartupTimeoutSeconds)|\(monitor.isLiveDebugEnabled)")
+                .opacity(isLiveStreamReady ? 1 : 0)
+
+                if let streamError {
+                    Text(streamError)
+                        .font(.callout)
+                        .foregroundStyle(.white.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(12)
+                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding()
+                }
+            }
+        } else {
             jpegContent
                 .overlay(alignment: .center) {
                     if isUsingJPEGFallback {
@@ -66,30 +123,6 @@ struct VideoFeedView: View {
                             .padding()
                     }
                 }
-        } else {
-            let streamName = monitor.currentFeedStreamName
-            FrigateMSEStreamView(
-                serverURL: monitor.baseURL,
-                cameraName: streamName,
-                cookies: monitor.authenticationCookies(),
-                sessionID: monitor.streamSessionID,
-                errorMessage: $streamError,
-                onAspectRatioChanged: onAspectRatioChanged,
-                onDismiss: onDismiss,
-                onFallbackToJPEG: switchToJPEGFallback
-            )
-            .id("\(monitor.serverAddress)|\(streamName)|\(monitor.streamSessionID.uuidString)")
-            .overlay(alignment: .center) {
-                if let streamError {
-                    Text(streamError)
-                        .font(.callout)
-                        .foregroundStyle(.white.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(12)
-                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .padding()
-                }
-            }
         }
     }
 
@@ -149,6 +182,37 @@ struct VideoFeedView: View {
     }
 
     @ViewBuilder
+    private var streamBadges: some View {
+        if monitor.feedMode == .stream {
+            VStack {
+                HStack {
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text(isLiveStreamReady ? "LIVE VIDEO" : "JPEG PREVIEW")
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                isLiveStreamReady ? .green.opacity(0.78) : .blue.opacity(0.78),
+                                in: Capsule()
+                            )
+
+                        Text("MSE · \(liveStatus)")
+                            .foregroundStyle(.white.opacity(0.94))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.black.opacity(0.65), in: Capsule())
+                    }
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                .padding(10)
+                Spacer()
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
     private var activityBadge: some View {
         VStack {
             HStack(alignment: .top) {
@@ -191,7 +255,7 @@ struct VideoFeedView: View {
     }
 
     private func startLoadingFrames() {
-        guard showsJPEG, frameTask == nil else {
+        guard needsJPEGFrames, frameTask == nil else {
             return
         }
 
@@ -214,8 +278,10 @@ struct VideoFeedView: View {
     }
 
     private func updateFeedMode() {
-        if showsJPEG {
+        if monitor.feedMode == .jpeg || isUsingJPEGFallback {
             streamError = nil
+        }
+        if needsJPEGFrames {
             startLoadingFrames()
         } else {
             stopLoadingFrames()
@@ -225,8 +291,8 @@ struct VideoFeedView: View {
         }
     }
 
-    private var showsJPEG: Bool {
-        monitor.feedMode == .jpeg || isUsingJPEGFallback
+    private var needsJPEGFrames: Bool {
+        monitor.feedMode == .jpeg || isUsingJPEGFallback || !isLiveStreamReady
     }
 
     private func switchToJPEGFallback() {
@@ -235,6 +301,8 @@ struct VideoFeedView: View {
         }
 
         isUsingJPEGFallback = true
+        isLiveStreamReady = false
+        liveStatus = "unavailable"
         streamError = nil
         startLoadingFrames()
     }

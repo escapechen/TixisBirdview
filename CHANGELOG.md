@@ -36,6 +36,12 @@ versioning when releases are tagged.
   local builds use an ignored per-Mac Team ID setting.
 - The popup now persists its width and display position while deriving height
   from each JPEG or live-stream aspect ratio, avoiding cropped wide feeds.
+- Live playback now keeps JPEG snapshots visible while WebKit establishes or
+  retries MSE video, switching only after a decoded frame arrives. The
+  1–15-second **Retry live player after** setting (default 5 seconds)
+  controls each connection attempt instead of permanently falling back.
+- Live popups now show compact JPEG/live-player status badges. Optional,
+  privacy-safe live-player diagnostics can be written to terminal output.
 
 ### Security
 

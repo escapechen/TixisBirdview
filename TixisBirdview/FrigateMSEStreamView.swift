@@ -12,10 +12,14 @@ struct FrigateMSEStreamView: NSViewRepresentable {
     let cameraName: String
     let cookies: [HTTPCookie]
     let sessionID: UUID
+    let startupTimeoutSeconds: Int
+    let debugEnabled: Bool
     @Binding var errorMessage: String?
     let onAspectRatioChanged: (CGFloat) -> Void
     let onDismiss: () -> Void
+    let onConnected: () -> Void
     let onFallbackToJPEG: () -> Void
+    let onStatusChanged: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -40,7 +44,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             return
         }
 
-        let loadID = "\(serverURL.absoluteString)|\(cameraName)|\(sessionID.uuidString)"
+        let loadID = "\(serverURL.absoluteString)|\(cameraName)|\(sessionID.uuidString)|\(startupTimeoutSeconds)|\(debugEnabled)"
         guard context.coordinator.loadID != loadID else {
             return
         }
@@ -48,7 +52,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
         context.coordinator.loadID = loadID
         errorMessage = nil
         context.coordinator.load(
-            html: Self.html(serverURL: serverURL, cameraName: cameraName),
+            html: Self.html(
+                serverURL: serverURL,
+                cameraName: cameraName,
+                startupTimeoutSeconds: startupTimeoutSeconds,
+                debugEnabled: debugEnabled
+            ),
             baseURL: serverURL,
             cookies: cookies,
             in: webView
@@ -60,7 +69,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "frigateMSE")
     }
 
-    private static func html(serverURL: URL, cameraName: String) -> String {
+    private static func html(
+        serverURL: URL,
+        cameraName: String,
+        startupTimeoutSeconds: Int,
+        debugEnabled: Bool
+    ) -> String {
         let encodedServerURL = String(
             data: (try? JSONEncoder().encode(serverURL.absoluteString)) ?? Data("\"\"".utf8),
             encoding: .utf8
@@ -83,11 +97,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             const server = \(encodedServerURL);
             const camera = \(encodedCameraName);
             const video = document.getElementById("feed");
+            const startupTimeoutMs = \(min(15, max(1, startupTimeoutSeconds)) * 1000);
+            const debugEnabled = \(debugEnabled ? "true" : "false");
             const codecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
             const maxBufferSeconds = 4;
             const keepBufferSeconds = 2.5;
             const maxPendingBytes = 2 * 1024 * 1024;
-            const maxRecoveryAttempts = 3;
             const reconnectDelay = 1500;
             var socket;
             var mediaSource;
@@ -111,7 +126,16 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               window.webkit?.messageHandlers?.frigateMSE?.postMessage({ type: "connected" });
             }
 
+            function status(message) {
+              window.webkit?.messageHandlers?.frigateMSE?.postMessage({ type: "status", message });
+            }
+
+            function debug(message) {
+              if (debugEnabled) window.webkit?.messageHandlers?.frigateMSE?.postMessage({ type: "debug", message });
+            }
+
             function fallback(message) {
+              debug("live player permanently unavailable");
               shouldReconnect = false;
               clearTimeout(firstFrameTimer);
               clearTimeout(restartTimer);
@@ -136,6 +160,9 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             video.addEventListener("loadeddata", () => {
               clearTimeout(firstFrameTimer);
+              firstFrameTimer = undefined;
+              status("playing");
+              debug("decoded first video frame");
               connected();
               reportAspectRatio();
               lastPlaybackTime = video.currentTime;
@@ -187,13 +214,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               if (!shouldReconnect || isRecovering) return;
               isRecovering = true;
               clearTimeout(firstFrameTimer);
+              firstFrameTimer = undefined;
               clearTimeout(stablePlaybackTimer);
               recoveryAttempts += 1;
-              if (recoveryAttempts >= maxRecoveryAttempts) {
-                fallback("Live stream failed repeatedly. Showing JPEG snapshots.");
-                return;
-              }
-              report(`${reason} Retrying… (${recoveryAttempts}/${maxRecoveryAttempts - 1})`);
+              status(`retrying (${recoveryAttempts})`);
+              debug(`recovery attempt ${recoveryAttempts}`);
+              report(`${reason} JPEG snapshots remain visible while live video retries.`);
               closeSocket();
               resetMediaSource();
               clearTimeout(restartTimer);
@@ -260,6 +286,8 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             function start() {
               if (!shouldReconnect) return;
+              status("connecting");
+              debug("opening MSE connection");
               const MediaSourceConstructor = window.ManagedMediaSource || window.MediaSource;
               if (!MediaSourceConstructor) {
                 fallback("This Mac cannot play Frigate's MSE stream. Showing JPEG snapshots.");
@@ -288,6 +316,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
               currentSocket.onopen = () => {
                 if (socket !== currentSocket || !shouldReconnect) return;
+                status("socket connected");
                 mediaSource = new MediaSourceConstructor();
                 mediaSource.addEventListener("sourceopen", () => {
                   try {
@@ -308,7 +337,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 clearTimeout(firstFrameTimer);
                 firstFrameTimer = setTimeout(() => {
                   recover("Frigate connected but did not send playable video.");
-                }, 6000);
+                }, startupTimeoutMs);
               };
 
               currentSocket.onmessage = (event) => {
@@ -324,6 +353,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                   if (response.type !== "mse") return;
                   try {
                     if (!mediaSource || sourceBuffer) return;
+                    debug(`Frigate announced ${response.value}`);
                     sourceBuffer = mediaSource.addSourceBuffer(response.value);
                     if (sourceBuffer.mode) sourceBuffer.mode = "segments";
                     sourceBuffer.addEventListener("updateend", () => {
@@ -419,11 +449,20 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             switch type {
             case "connected":
                 parent.errorMessage = nil
+                parent.onConnected()
             case "dismiss":
                 parent.onDismiss()
             case "fallback":
                 parent.errorMessage = body["message"] as? String
                 parent.onFallbackToJPEG()
+            case "status":
+                if let status = body["message"] as? String {
+                    parent.onStatusChanged(status)
+                }
+            case "debug":
+                if let detail = body["message"] as? String {
+                    print("TixisBirdview live: \(detail.prefix(300))")
+                }
             case "aspectRatio":
                 guard let value = body["value"] as? NSNumber else {
                     return

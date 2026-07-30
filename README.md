@@ -79,6 +79,14 @@ Open the ![Tixi menu-bar icon](TixisBirdview/Assets.xcassets/TixiMenuBar.imagese
 6. Choose a feed mode:
    - **JPEG snapshots**: reliable, updated twice per second.
    - **Live stream**: lower latency go2rtc video when the camera supports it.
+   When using **Live stream**, choose **Retry live player after** (1–15
+   seconds). TixisBirdview starts JPEG immediately and keeps it visible while
+   the MSE player connects or retries in the background. It switches to video
+   only after a decoded frame arrives. The default is 5 seconds; use a shorter
+   time for doorbell-like feeds or increase it for a camera with a slow
+   key-frame interval. Enable **Write live-player diagnostics to terminal
+   output** when troubleshooting; its concise state lines intentionally omit
+   server addresses, camera names, credentials, cookies, and tokens.
 7. Choose **Popup for**:
    - **Selected classifications**: only selected names open a feed.
    - **Any tracked object**: every Frigate object event opens a feed.
@@ -114,7 +122,7 @@ filters them by their object classification.
 | Menu-bar icon is red | Confirm the URL, Frigate availability, macOS TLS trust, and login details. TixisBirdview shows a short connection-lost/restored message when the state changes. |
 | No popup | Make sure monitoring is not paused. Temporarily select **Any tracked object**, then check the status line for the last activity Frigate sent. |
 | A name never triggers | Add the exact event label or sub-label shown in Frigate. A Birdseye image without a new event does not count. |
-| Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream; use **JPEG snapshots** as the immediate fallback. |
+| Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream. JPEG is loaded immediately while MSE keeps connecting in the background; reduce **Retry live player after** to retry sooner. |
 | Feed is on the wrong screen | Drag it once to the intended display. Its position is saved. |
 
 ## Build from source

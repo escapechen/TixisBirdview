@@ -113,6 +113,20 @@ struct SettingsMenuView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
+            if monitor.feedMode == .stream {
+                Stepper(value: $monitor.liveStartupTimeoutSeconds, in: 1...15) {
+                    Text("Retry live player after: \(monitor.liveStartupTimeoutSeconds) seconds")
+                }
+                .help("JPEG stays visible while live video retries in the background. This is how long a live attempt gets to produce a frame before it reconnects.")
+
+                Text("JPEG starts loading immediately while live video connects.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Write live-player diagnostics to terminal output", isOn: $monitor.isLiveDebugEnabled)
+                    .help("Writes concise playback state transitions to the terminal where TixisBirdview was started. It excludes server addresses, camera names, credentials, cookies, and tokens.")
+            }
+
             classificationSettings
         }
     }

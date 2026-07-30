@@ -39,6 +39,31 @@ final class FrigateMonitor {
         }
     }
 
+    enum EventDeliveryMode: String, CaseIterable, Identifiable {
+        case httpPolling
+        case mqtt
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .httpPolling:
+                "HTTP polling — compatible default"
+            case .mqtt:
+                "MQTT — lower-latency event delivery"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .httpPolling:
+                "Checks Frigate for events every two seconds without requiring a broker."
+            case .mqtt:
+                "Receives Frigate events as they arrive from an MQTT broker. It does not change camera or detection latency."
+            }
+        }
+    }
+
     enum PopupTrigger: String, CaseIterable, Identifiable {
         case selectedClassifications
         case anyObject
@@ -151,7 +176,7 @@ final class FrigateMonitor {
             case .empty:
                 "Enter a server address."
             case .invalidURL:
-                "Enter a valid address, for example https://192.168.168.168."
+                "Enter a valid address, for example https://frigate.example.net:8971."
             case .unsupportedScheme:
                 "Use http:// or https://."
             case .missingHost:
@@ -196,6 +221,35 @@ final class FrigateMonitor {
         }
     }
 
+    enum MqttConfigurationError: LocalizedError {
+        case missingHost
+        case invalidHost
+        case invalidPort
+        case missingTopicPrefix
+        case passwordWithoutUsername
+        case missingPassword
+        case keychain(OSStatus)
+
+        var errorDescription: String? {
+            switch self {
+            case .missingHost:
+                "Enter an MQTT broker host."
+            case .invalidHost:
+                "Enter only an MQTT host or IP address, without a scheme, port, path, or credentials."
+            case .invalidPort:
+                "Use an MQTT port from 1 to 65535."
+            case .missingTopicPrefix:
+                "Enter a concrete MQTT topic prefix, such as frigate."
+            case .passwordWithoutUsername:
+                "Enter an MQTT username with the password."
+            case .missingPassword:
+                "Enter the MQTT password."
+            case .keychain(let status):
+                "Could not access the macOS Keychain (\(status))."
+            }
+        }
+    }
+
     struct OverlayActivity: Equatable {
         let title: String
         let confidence: String?
@@ -232,6 +286,59 @@ final class FrigateMonitor {
         didSet {
             UserDefaults.standard.set(feedMode.rawValue, forKey: Self.feedModeKey)
         }
+    }
+
+    var liveStartupTimeoutSeconds: Int {
+        didSet {
+            let validValue = min(15, max(1, liveStartupTimeoutSeconds))
+            guard validValue == liveStartupTimeoutSeconds else {
+                liveStartupTimeoutSeconds = validValue
+                return
+            }
+            UserDefaults.standard.set(liveStartupTimeoutSeconds, forKey: Self.liveStartupTimeoutKey)
+        }
+    }
+
+    var isLiveDebugEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isLiveDebugEnabled, forKey: Self.liveDebugEnabledKey)
+        }
+    }
+
+    var eventDeliveryMode: EventDeliveryMode {
+        didSet {
+            UserDefaults.standard.set(eventDeliveryMode.rawValue, forKey: Self.eventDeliveryModeKey)
+            guard isMonitoring else { return }
+            if eventDeliveryMode == .mqtt {
+                pollingTask?.cancel()
+                pollingTask = nil
+                startMqttDelivery()
+                startInitialHttpSync()
+            } else {
+                mqttClient.stop()
+                startPolling()
+            }
+        }
+    }
+
+    var mqttBrokerHost: String {
+        didSet { UserDefaults.standard.set(mqttBrokerHost, forKey: Self.mqttBrokerHostKey) }
+    }
+
+    var mqttBrokerPort: Int {
+        didSet { UserDefaults.standard.set(mqttBrokerPort, forKey: Self.mqttBrokerPortKey) }
+    }
+
+    var mqttUsesTLS: Bool {
+        didSet { UserDefaults.standard.set(mqttUsesTLS, forKey: Self.mqttUsesTLSKey) }
+    }
+
+    var mqttUsername: String {
+        didSet { UserDefaults.standard.set(mqttUsername, forKey: Self.mqttUsernameKey) }
+    }
+
+    var mqttTopicPrefix: String {
+        didSet { UserDefaults.standard.set(mqttTopicPrefix, forKey: Self.mqttTopicPrefixKey) }
     }
 
     var popupTrigger: PopupTrigger {
@@ -340,10 +447,34 @@ final class FrigateMonitor {
     var availableClassificationNames: [String] = []
     var isLoadingClassifications = false
     var classificationLoadError: String?
+    var eventDeliveryStatus = "HTTP polling is ready."
+    var isMqttVerificationInProgress = false
+    var mqttVerificationStatus: String?
 
     @ObservationIgnored var onOverlayVisibilityChanged: ((Bool) -> Void)?
     @ObservationIgnored var onConnectionStateChanged: ((ConnectionState) -> Void)?
     @ObservationIgnored private var pollingTask: Task<Void, Never>?
+    @ObservationIgnored private lazy var mqttClient = MqttClient(
+        onStateChange: { [weak self] isConnected, detail in
+            guard let self, self.isMonitoring, self.eventDeliveryMode == .mqtt else { return }
+            self.connectionState = isConnected ? .connected : .failed(detail)
+            self.eventDeliveryStatus = detail
+        },
+        onMessage: { [weak self] topic, payload in
+            self?.handleMqttMessage(topic: topic, payload: payload)
+        }
+    )
+    @ObservationIgnored private lazy var mqttVerifier = MqttClient(
+        onStateChange: { [weak self] isConnected, detail in
+            guard let self, self.isMqttVerificationInProgress else { return }
+            self.completeMqttVerification(
+                isConnected
+                    ? "MQTT verification succeeded: the broker accepted the connection and both Frigate topic subscriptions."
+                    : "MQTT verification failed: \(detail)"
+            )
+        },
+        onMessage: { _, _ in }
+    )
     @ObservationIgnored private var overlayDismissalTask: Task<Void, Never>?
     @ObservationIgnored private var seenEventIDs = Set<String>()
     @ObservationIgnored private var seenReviewItemIDs = Set<String>()
@@ -360,6 +491,14 @@ final class FrigateMonitor {
     private static let usernameKey = "serverUsername"
     private static let overlayDurationKey = "overlayDurationSeconds"
     private static let feedModeKey = "feedMode"
+    private static let liveStartupTimeoutKey = "liveStartupTimeoutSeconds"
+    private static let liveDebugEnabledKey = "liveDebugEnabled"
+    private static let eventDeliveryModeKey = "eventDeliveryMode"
+    private static let mqttBrokerHostKey = "mqttBrokerHost"
+    private static let mqttBrokerPortKey = "mqttBrokerPort"
+    private static let mqttUsesTLSKey = "mqttUsesTLS"
+    private static let mqttUsernameKey = "mqttUsername"
+    private static let mqttTopicPrefixKey = "mqttTopicPrefix"
     private static let popupTriggerKey = "popupTrigger"
     private static let soundAlertEnabledKey = "soundAlertEnabled"
     private static let alertSoundKey = "alertSound"
@@ -369,17 +508,41 @@ final class FrigateMonitor {
     private static let soundCooldownEnabledKey = "soundCooldownEnabled"
     private static let soundCooldownKey = "soundCooldownSeconds"
     private static let selectedClassificationsKey = "selectedClassificationNames"
-    private static let defaultServerAddress = "https://192.168.168.168"
+    private static let defaultServerAddress = "https://frigate.invalid"
     private static let defaultOverlayDurationSeconds = 20.0
+    private static let defaultLiveStartupTimeoutSeconds = 5
     private static let defaultSoundAlertVolume = 0.6
     private static let defaultCooldownSeconds = 60
     private static let defaultSelectedClassificationNames: Set<String> = ["bird", "cat", "bruno"]
     private static let keychainService = "org.tixisbirdview.app.frigate"
+    private static let mqttKeychainService = "org.tixisbirdview.app.mqtt"
 
     init() {
         let savedOverlayDuration = UserDefaults.standard.double(forKey: Self.overlayDurationKey)
         overlayDurationSeconds = savedOverlayDuration > 0 ? savedOverlayDuration : Self.defaultOverlayDurationSeconds
         feedMode = FeedMode(rawValue: UserDefaults.standard.string(forKey: Self.feedModeKey) ?? "") ?? .jpeg
+        liveStartupTimeoutSeconds = UserDefaults.standard.object(forKey: Self.liveStartupTimeoutKey) == nil
+            ? Self.defaultLiveStartupTimeoutSeconds
+            : min(15, max(1, UserDefaults.standard.integer(forKey: Self.liveStartupTimeoutKey)))
+        isLiveDebugEnabled = UserDefaults.standard.bool(forKey: Self.liveDebugEnabledKey)
+        eventDeliveryMode = EventDeliveryMode(
+            rawValue: UserDefaults.standard.string(forKey: Self.eventDeliveryModeKey) ?? ""
+        ) ?? .httpPolling
+        mqttBrokerHost = UserDefaults.standard.string(forKey: Self.mqttBrokerHostKey) ?? ""
+        mqttBrokerPort = min(65535, max(
+            1,
+            UserDefaults.standard.object(forKey: Self.mqttBrokerPortKey) == nil
+                ? 8883
+                : UserDefaults.standard.integer(forKey: Self.mqttBrokerPortKey)
+        ))
+        mqttUsesTLS = UserDefaults.standard.object(forKey: Self.mqttUsesTLSKey) == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: Self.mqttUsesTLSKey)
+        mqttUsername = UserDefaults.standard.string(forKey: Self.mqttUsernameKey) ?? ""
+        mqttTopicPrefix = UserDefaults.standard.string(forKey: Self.mqttTopicPrefixKey) ?? "frigate"
+        if mqttTopicPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mqttTopicPrefix = "frigate"
+        }
         popupTrigger = PopupTrigger(rawValue: UserDefaults.standard.string(forKey: Self.popupTriggerKey) ?? "") ?? .selectedClassifications
         isSoundAlertEnabled = UserDefaults.standard.bool(forKey: Self.soundAlertEnabledKey)
         alertSound = AlertSound(rawValue: UserDefaults.standard.string(forKey: Self.alertSoundKey) ?? "") ?? .purr
@@ -499,25 +662,21 @@ final class FrigateMonitor {
 
         isMonitoring = true
         connectionState = .connecting
-
-        pollingTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.pollActivity()
-
-                do {
-                    try await Task.sleep(for: .seconds(2))
-                } catch {
-                    break
-                }
-            }
+        if eventDeliveryMode == .mqtt {
+            startMqttDelivery()
+            startInitialHttpSync()
+        } else {
+            startPolling()
         }
     }
 
     func stop() {
         pollingTask?.cancel()
         pollingTask = nil
+        mqttClient.stop()
         isMonitoring = false
         connectionState = .idle
+        eventDeliveryStatus = "Event delivery is stopped."
     }
 
     func toggleMonitoring() {
@@ -538,6 +697,58 @@ final class FrigateMonitor {
 
     func previewSoundAlert() {
         playSoundAlert(force: true)
+    }
+
+    @discardableResult
+    func applyMqttSettings(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        username newUsername: String,
+        password: String,
+        topicPrefix: String
+    ) -> Bool {
+        do {
+            let normalizedHost = try Self.validatedMqttHost(host)
+            let normalizedTopicPrefix = try Self.validatedMqttTopicPrefix(topicPrefix)
+            guard (1...65535).contains(port) else {
+                throw MqttConfigurationError.invalidPort
+            }
+            try updateMqttCredentials(host: normalizedHost, username: newUsername, password: password)
+            mqttBrokerHost = normalizedHost
+            mqttBrokerPort = port
+            mqttUsesTLS = useTLS
+            mqttTopicPrefix = normalizedTopicPrefix
+            mqttVerificationStatus = nil
+        } catch {
+            mqttVerificationStatus = "MQTT settings were not applied: \(error.localizedDescription)"
+            return false
+        }
+
+        if isMonitoring, eventDeliveryMode == .mqtt {
+            mqttClient.stop()
+            startMqttDelivery()
+        }
+        return true
+    }
+
+    func verifyMqttConnection() {
+        guard !isMqttVerificationInProgress else { return }
+        do {
+            let configuration = try mqttConfiguration()
+            isMqttVerificationInProgress = true
+            mqttVerificationStatus = "Verifying the MQTT connection and Frigate topic subscriptions…"
+            mqttVerifier.start(configuration)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(20))
+                guard let self, self.isMqttVerificationInProgress else { return }
+                self.completeMqttVerification(
+                    "MQTT verification timed out before the broker confirmed both subscriptions."
+                )
+            }
+        } catch {
+            mqttVerificationStatus = "MQTT verification failed: \(error.localizedDescription)"
+        }
     }
 
     @discardableResult
@@ -574,6 +785,73 @@ final class FrigateMonitor {
         }
 
         return true
+    }
+
+    private func startPolling() {
+        mqttClient.stop()
+        eventDeliveryStatus = "HTTP polling every 2 seconds."
+        pollingTask?.cancel()
+        pollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollActivity()
+
+                do {
+                    try await Task.sleep(for: .seconds(2))
+                } catch {
+                    break
+                }
+            }
+        }
+    }
+
+    private func startInitialHttpSync() {
+        Task { [weak self] in
+            await self?.pollActivity()
+        }
+    }
+
+    private func startMqttDelivery() {
+        do {
+            let configuration = try mqttConfiguration()
+            eventDeliveryStatus = "Connecting to MQTT…"
+            mqttClient.start(configuration)
+        } catch {
+            let detail = error.localizedDescription
+            eventDeliveryStatus = detail
+            connectionState = .failed(detail)
+        }
+    }
+
+    private func mqttConfiguration() throws -> MqttClient.Configuration {
+        let host = try Self.validatedMqttHost(mqttBrokerHost)
+        let topicPrefix = try Self.validatedMqttTopicPrefix(mqttTopicPrefix)
+        guard (1...65535).contains(mqttBrokerPort) else {
+            throw MqttConfigurationError.invalidPort
+        }
+        let normalizedUsername = mqttUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password: String
+        if normalizedUsername.isEmpty {
+            password = ""
+        } else if let savedPassword = try Self.savedMqttPassword(host: host, username: normalizedUsername) {
+            password = savedPassword
+        } else {
+            throw MqttConfigurationError.missingPassword
+        }
+        return MqttClient.Configuration(
+            host: host,
+            port: UInt16(mqttBrokerPort),
+            useTLS: mqttUsesTLS,
+            username: normalizedUsername,
+            password: password,
+            topicPrefix: topicPrefix
+        )
+    }
+
+    private func completeMqttVerification(_ status: String) {
+        guard isMqttVerificationInProgress else { return }
+        isMqttVerificationInProgress = false
+        mqttVerifier.stop()
+        mqttVerificationStatus = status
     }
 
     private func pollActivity() async {
@@ -615,6 +893,10 @@ final class FrigateMonitor {
         }
 
         guard !Task.isCancelled else {
+            return
+        }
+
+        guard eventDeliveryMode == .httpPolling else {
             return
         }
 
