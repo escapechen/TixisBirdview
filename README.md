@@ -32,6 +32,14 @@ High reasoning).
   each camera's aspect ratio. The feed does not take focus from the app you
   are using.
 
+## Activity popup
+
+The popup shows why it opened, the relevant camera, the current feed mode, and
+the remaining display time. This privacy-safe rendering preserves the real
+window UI while using a blurred synthetic scene and non-identifiable figure.
+
+![TixisBirdview activity popup for a detected person](docs/activity-popup-person.png)
+
 ## Install from source — no Swift knowledge required
 
 There is no signed or notarized package yet. Publishing one requires a paid
