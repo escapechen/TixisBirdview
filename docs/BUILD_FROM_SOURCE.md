@@ -81,6 +81,9 @@ included when you share or update the project.
    ./build-and-install.sh
    ```
 
+   The script runs the local automated tests first. It only builds and installs
+   the app when they pass.
+
 4. Enter your Mac administrator password when asked. It is used only to place
    the finished app in `/Applications`.
 5. Start **TixisBirdview** from Applications and complete the
@@ -88,18 +91,20 @@ included when you share or update the project.
 
 ## Test a source change
 
-If you modify the app, run its automated checks before building an installable
-copy:
+If you modify the app, run its automated checks with:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
-  -project TixisBirdview.xcodeproj -scheme TixisBirdview -configuration Debug \
-  -derivedDataPath /private/tmp/TixisBirdview-DerivedData \
-  CODE_SIGNING_ALLOWED=NO test
+./build-and-install.sh --test
 ```
 
-This currently verifies live-feed click-to-dismiss behavior. It does not need
-your Apple signing certificate or access to a camera server.
+The suite is local: it does not need your Apple signing certificate, Frigate
+credentials, cameras, or an MQTT broker. It verifies the Frigate login
+request/session-cookie contract, MQTT credentials and event/review
+subscriptions, MQTT event-to-camera-popup routing, JPEG preview to live-MSE
+transition, one-click popup dismissal, and the no-keyboard-focus overlay rule.
+It does not build an app bundle, install anything, or ask for your administrator
+password. A normal `./build-and-install.sh` run performs this test step again
+before installation.
 
 ## If the build fails
 

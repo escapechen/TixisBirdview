@@ -53,8 +53,9 @@ The process is deliberately simple: install Xcode once, follow the
 ./build-and-install.sh
 ```
 
-The script builds TixisBirdview and installs it in `/Applications`. No Swift
-knowledge is needed.
+The script runs local automated tests, builds TixisBirdview, then installs it
+in `/Applications`. Use `./build-and-install.sh --test` to run only the tests.
+No Swift knowledge is needed.
 
 ## What you need
 

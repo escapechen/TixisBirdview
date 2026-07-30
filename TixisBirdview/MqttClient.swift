@@ -10,6 +10,11 @@ import Foundation
 import Network
 
 final class MqttClient {
+    struct Packet {
+        let header: UInt8
+        let payload: [UInt8]
+    }
+
     struct Configuration: Equatable {
         let host: String
         let port: UInt16
@@ -227,50 +232,31 @@ final class MqttClient {
 
     private func sendConnectPacket() {
         guard !connectPacketSent, let configuration else { return }
-        var payload = encodeString("MQTT")
-        payload.append(4) // MQTT 3.1.1
-        var flags: UInt8 = 0x02 // clean session
-        if !configuration.username.isEmpty { flags |= 0x80 }
-        if !configuration.password.isEmpty { flags |= 0x40 }
-        payload.append(flags)
-        payload.append(UInt8(Self.keepAliveSeconds >> 8))
-        payload.append(UInt8(Self.keepAliveSeconds & 0xff))
-        payload += encodeString("tixisbirdview-\(UUID().uuidString)")
-        if !configuration.username.isEmpty { payload += encodeString(configuration.username) }
-        if !configuration.password.isEmpty { payload += encodeString(configuration.password) }
-        guard !payload.isEmpty else {
+        guard let packet = Self.makeConnectPacket(
+            configuration: configuration,
+            clientIdentifier: "tixisbirdview-\(UUID().uuidString)"
+        ) else {
             reportFailure("MQTT connection details are too large.")
             return
         }
         connectPacketSent = true
-        writePacket(header: 0x10, payload: payload)
+        writePacket(header: packet.header, payload: packet.payload)
     }
 
     private func sendSubscriptions() {
         guard let configuration else { return }
-        let prefix = configuration.topicPrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !prefix.isEmpty else {
-            reportFailure("Enter a concrete MQTT topic prefix, such as frigate.")
-            return
-        }
         subscriptionPacketIdentifier = nextPacketIdentifier
         nextPacketIdentifier &+= 1
         if nextPacketIdentifier == 0 { nextPacketIdentifier = 1 }
 
-        var payload: [UInt8] = [
-            UInt8(subscriptionPacketIdentifier >> 8),
-            UInt8(subscriptionPacketIdentifier & 0xff),
-        ]
-        for topic in ["\(prefix)/events", "\(prefix)/reviews"] {
-            let encodedTopic = encodeString(topic)
-            guard !encodedTopic.isEmpty else {
-                reportFailure("MQTT topic is too large.")
-                return
-            }
-            payload += encodedTopic
-            payload.append(0) // requested QoS 0
+        guard let packet = Self.makeSubscriptionPacket(
+            topicPrefix: configuration.topicPrefix,
+            packetIdentifier: subscriptionPacketIdentifier
+        ) else {
+            reportFailure("Enter a concrete MQTT topic prefix, such as frigate.")
+            return
         }
-        writePacket(header: 0x82, payload: payload)
+        writePacket(header: packet.header, payload: packet.payload)
     }
 
     private func handlePublish(header: UInt8, payload: [UInt8]) -> Bool {
@@ -309,7 +295,7 @@ final class MqttClient {
             return
         }
         var packet = [header]
-        packet += encodeRemainingLength(payload.count)
+        packet += Self.encodeRemainingLength(payload.count)
         packet += payload
         connection.send(content: Data(packet), completion: .contentProcessed { [weak self, weak connection] error in
             guard let self, let connection else { return }
@@ -391,13 +377,47 @@ final class MqttClient {
         }
     }
 
-    private func encodeString(_ value: String) -> [UInt8] {
+    static func makeConnectPacket(configuration: Configuration, clientIdentifier: String) -> Packet? {
+        var payload = encodeString("MQTT")
+        payload.append(4) // MQTT 3.1.1
+        var flags: UInt8 = 0x02 // clean session
+        if !configuration.username.isEmpty { flags |= 0x80 }
+        if !configuration.password.isEmpty { flags |= 0x40 }
+        payload.append(flags)
+        payload.append(UInt8(keepAliveSeconds >> 8))
+        payload.append(UInt8(keepAliveSeconds & 0xff))
+        payload += encodeString(clientIdentifier)
+        if !configuration.username.isEmpty { payload += encodeString(configuration.username) }
+        if !configuration.password.isEmpty { payload += encodeString(configuration.password) }
+        guard !payload.isEmpty, payload.count <= maximumPacketSize else { return nil }
+        return Packet(header: 0x10, payload: payload)
+    }
+
+    static func makeSubscriptionPacket(topicPrefix: String, packetIdentifier: UInt16) -> Packet? {
+        let prefix = topicPrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !prefix.isEmpty else { return nil }
+
+        var payload: [UInt8] = [
+            UInt8(packetIdentifier >> 8),
+            UInt8(packetIdentifier & 0xff),
+        ]
+        for topic in ["\(prefix)/events", "\(prefix)/reviews"] {
+            let encodedTopic = encodeString(topic)
+            guard !encodedTopic.isEmpty else { return nil }
+            payload += encodedTopic
+            payload.append(0) // requested QoS 0
+        }
+        guard payload.count <= maximumPacketSize else { return nil }
+        return Packet(header: 0x82, payload: payload)
+    }
+
+    private static func encodeString(_ value: String) -> [UInt8] {
         let bytes = Array(value.utf8)
         guard bytes.count <= Int(UInt16.max) else { return [] }
         return [UInt8(bytes.count >> 8), UInt8(bytes.count & 0xff)] + bytes
     }
 
-    private func encodeRemainingLength(_ value: Int) -> [UInt8] {
+    private static func encodeRemainingLength(_ value: Int) -> [UInt8] {
         var remaining = value
         var result = [UInt8]()
         repeat {

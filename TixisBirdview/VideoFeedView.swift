@@ -8,6 +8,28 @@
 import AppKit
 import SwiftUI
 
+enum FeedPlaybackState: Equatable {
+    case jpegSnapshots
+    case jpegPreview
+    case liveVideo
+
+    static func make(
+        feedMode: FrigateMonitor.FeedMode,
+        isOverlayVisible: Bool,
+        isUsingJPEGFallback: Bool,
+        isLiveStreamReady: Bool
+    ) -> Self {
+        guard feedMode == .stream, isOverlayVisible, !isUsingJPEGFallback else {
+            return .jpegSnapshots
+        }
+        return isLiveStreamReady ? .liveVideo : .jpegPreview
+    }
+
+    var mountsMSEPlayer: Bool {
+        self == .jpegPreview || self == .liveVideo
+    }
+}
+
 struct VideoFeedView: View {
     let monitor: FrigateMonitor
     var onAspectRatioChanged: (CGFloat) -> Void
@@ -71,9 +93,7 @@ struct VideoFeedView: View {
 
     @ViewBuilder
     private var content: some View {
-        if monitor.feedMode == .stream,
-           !isUsingJPEGFallback,
-           monitor.shouldShowOverlay {
+        if playbackState.mountsMSEPlayer {
             ZStack {
                 jpegContent
 
@@ -207,11 +227,13 @@ struct VideoFeedView: View {
     }
 
     private var feedBadgeTitle: String {
-        switch monitor.feedMode {
-        case .jpeg:
-            "JPEG SNAPSHOTS"
-        case .stream:
-            isLiveStreamReady ? "LIVE VIDEO" : "JPEG PREVIEW"
+        switch playbackState {
+        case .jpegSnapshots:
+            monitor.feedMode == .jpeg ? "JPEG SNAPSHOTS" : "JPEG PREVIEW"
+        case .jpegPreview:
+            "JPEG PREVIEW"
+        case .liveVideo:
+            "LIVE VIDEO"
         }
     }
 
@@ -225,11 +247,11 @@ struct VideoFeedView: View {
     }
 
     private var feedBadgeColor: Color {
-        switch monitor.feedMode {
-        case .jpeg:
+        switch playbackState {
+        case .jpegSnapshots, .jpegPreview:
             .blue.opacity(0.78)
-        case .stream:
-            isLiveStreamReady ? .green.opacity(0.78) : .blue.opacity(0.78)
+        case .liveVideo:
+            .green.opacity(0.78)
         }
     }
 
@@ -314,6 +336,15 @@ struct VideoFeedView: View {
 
     private var needsJPEGFrames: Bool {
         monitor.feedMode == .jpeg || isUsingJPEGFallback || !isLiveStreamReady
+    }
+
+    private var playbackState: FeedPlaybackState {
+        FeedPlaybackState.make(
+            feedMode: monitor.feedMode,
+            isOverlayVisible: monitor.shouldShowOverlay,
+            isUsingJPEGFallback: isUsingJPEGFallback,
+            isLiveStreamReady: isLiveStreamReady
+        )
     }
 
     private func switchToJPEGFallback() {

@@ -44,6 +44,13 @@ final class OverlayDismissPanelTests: XCTestCase {
         XCTAssertEqual(dismissalCount, 0)
     }
 
+    func testOverlayCanNeverTakeKeyboardFocus() {
+        let panel = makePanel()
+
+        XCTAssertFalse(panel.canBecomeKey)
+        XCTAssertFalse(panel.canBecomeMain)
+    }
+
     private func makePanel() -> OverlayDismissPanel {
         let panel = OverlayDismissPanel(
             contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
@@ -98,5 +105,180 @@ final class LiveStreamRoutingTests: XCTestCase {
         monitor.applyLiveStreamNames(["birdseye": "birdseye"])
 
         XCTAssertEqual(monitor.streamSessionID, initialSessionID)
+    }
+}
+
+final class FrigateLoginContractTests: XCTestCase {
+    func testLoginRequestUsesFrigateEndpointJSONAndCredentials() throws {
+        let request = try FrigateLoginRequest.make(
+            baseURL: URL(string: "https://frigate.example:8971")!,
+            username: "birdy",
+            password: "correct-horse"
+        )
+
+        XCTAssertEqual(request.url?.absoluteString, "https://frigate.example:8971/api/login")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json, ["user": "birdy", "password": "correct-horse"])
+    }
+
+    func testLoginResponseExtractsSessionCookie() throws {
+        let loginURL = URL(string: "https://frigate.example:8971/api/login")!
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: loginURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Set-Cookie": "frigate_token=token-value; Path=/; HttpOnly"]
+        ))
+
+        let cookies = FrigateLoginRequest.sessionCookies(from: response, for: loginURL)
+
+        XCTAssertEqual(cookies.count, 1)
+        XCTAssertEqual(cookies.first?.name, "frigate_token")
+        XCTAssertEqual(cookies.first?.value, "token-value")
+    }
+}
+
+final class MqttProtocolContractTests: XCTestCase {
+    func testConnectPacketCarriesConfiguredCredentials() throws {
+        let packet = try XCTUnwrap(MqttClient.makeConnectPacket(
+            configuration: .init(
+                host: "mqtt.example",
+                port: 1883,
+                useTLS: false,
+                username: "frigate-client",
+                password: "broker-secret",
+                topicPrefix: "frigate"
+            ),
+            clientIdentifier: "tixisbirdview-test"
+        ))
+
+        XCTAssertEqual(packet.header, 0x10)
+        var offset = 0
+        XCTAssertEqual(readMqttString(packet.payload, offset: &offset), "MQTT")
+        XCTAssertEqual(packet.payload[offset], 4)
+        offset += 1
+        XCTAssertEqual(packet.payload[offset], 0xc2, "clean session, username, password")
+        offset += 3 // flags and 30-second keepalive
+        XCTAssertEqual(readMqttString(packet.payload, offset: &offset), "tixisbirdview-test")
+        XCTAssertEqual(readMqttString(packet.payload, offset: &offset), "frigate-client")
+        XCTAssertEqual(readMqttString(packet.payload, offset: &offset), "broker-secret")
+        XCTAssertEqual(offset, packet.payload.count)
+    }
+
+    func testSubscribePacketUsesBothFrigateEventTopics() throws {
+        let packet = try XCTUnwrap(MqttClient.makeSubscriptionPacket(
+            topicPrefix: "/frigate/",
+            packetIdentifier: 42
+        ))
+
+        XCTAssertEqual(packet.header, 0x82)
+        var offset = 0
+        XCTAssertEqual(packet.payload[offset], 0)
+        XCTAssertEqual(packet.payload[offset + 1], 42)
+        offset += 2
+        XCTAssertEqual(readMqttString(packet.payload, offset: &offset), "frigate/events")
+        XCTAssertEqual(packet.payload[offset], 0)
+        offset += 1
+        XCTAssertEqual(readMqttString(packet.payload, offset: &offset), "frigate/reviews")
+        XCTAssertEqual(packet.payload[offset], 0)
+        offset += 1
+        XCTAssertEqual(offset, packet.payload.count)
+    }
+
+    private func readMqttString(_ bytes: [UInt8], offset: inout Int) -> String? {
+        guard offset + 2 <= bytes.count else { return nil }
+        let length = Int(bytes[offset]) << 8 | Int(bytes[offset + 1])
+        offset += 2
+        guard offset + length <= bytes.count else { return nil }
+        defer { offset += length }
+        return String(bytes: bytes[offset..<(offset + length)], encoding: .utf8)
+    }
+}
+
+@MainActor
+final class MqttEventToOverlayTests: XCTestCase {
+    func testRecentMqttEventPresentsTheMatchingCameraOverlay() {
+        let monitor = FrigateMonitor()
+        monitor.isMonitoring = true
+        monitor.eventDeliveryMode = .mqtt
+        monitor.mqttTopicPrefix = "frigate"
+        monitor.popupTrigger = .anyObject
+        monitor.isPopupCooldownEnabled = false
+        monitor.isSoundAlertEnabled = false
+
+        let payload = Data("""
+        {"after":{"id":"event-123","camera":"kitchen_cam","label":"person","sub_label":"Tixi","start_time":\(Date().timeIntervalSince1970),"end_time":null,"top_score":0.95}}
+        """.utf8)
+
+        monitor.receiveMqttMessage(topic: "frigate/events", payload: payload)
+
+        XCTAssertEqual(monitor.latestEvent?.camera, "kitchen_cam")
+        XCTAssertEqual(monitor.overlayActivity?.camera, "kitchen_cam")
+        XCTAssertEqual(monitor.overlayActivity?.title, "Tixi")
+        XCTAssertTrue(monitor.shouldShowOverlay)
+
+        monitor.dismissOverlay()
+    }
+
+    func testWrongMqttTopicDoesNotPresentAnOverlay() {
+        let monitor = FrigateMonitor()
+        monitor.isMonitoring = true
+        monitor.eventDeliveryMode = .mqtt
+        monitor.mqttTopicPrefix = "frigate"
+        monitor.popupTrigger = .anyObject
+
+        monitor.receiveMqttMessage(topic: "other/events", payload: Data("{}".utf8))
+
+        XCTAssertNil(monitor.latestEvent)
+        XCTAssertFalse(monitor.shouldShowOverlay)
+    }
+}
+
+final class FeedPlaybackStateTests: XCTestCase {
+    func testStreamStartsAsJPEGBeforeMSEBecomesPlayable() {
+        let state = FeedPlaybackState.make(
+            feedMode: .stream,
+            isOverlayVisible: true,
+            isUsingJPEGFallback: false,
+            isLiveStreamReady: false
+        )
+
+        XCTAssertEqual(state, .jpegPreview)
+        XCTAssertTrue(state.mountsMSEPlayer)
+    }
+
+    func testPlayableMSETransitionsToLiveVideo() {
+        let state = FeedPlaybackState.make(
+            feedMode: .stream,
+            isOverlayVisible: true,
+            isUsingJPEGFallback: false,
+            isLiveStreamReady: true
+        )
+
+        XCTAssertEqual(state, .liveVideo)
+        XCTAssertTrue(state.mountsMSEPlayer)
+    }
+
+    func testFallbackAndHiddenOverlayDoNotMountMSE() {
+        let fallback = FeedPlaybackState.make(
+            feedMode: .stream,
+            isOverlayVisible: true,
+            isUsingJPEGFallback: true,
+            isLiveStreamReady: false
+        )
+        let hidden = FeedPlaybackState.make(
+            feedMode: .stream,
+            isOverlayVisible: false,
+            isUsingJPEGFallback: false,
+            isLiveStreamReady: false
+        )
+
+        XCTAssertEqual(fallback, .jpegSnapshots)
+        XCTAssertFalse(fallback.mountsMSEPlayer)
+        XCTAssertEqual(hidden, .jpegSnapshots)
+        XCTAssertFalse(hidden.mountsMSEPlayer)
     }
 }

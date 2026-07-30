@@ -327,6 +327,11 @@ final class OverlayDismissPanel: NSPanel {
     private var didDragPrimaryMouse = false
     private let clickMovementTolerance: CGFloat = 3
 
+    // The feed is an informational overlay. It must never take the active
+    // application's keyboard focus, even when the user clicks it to dismiss.
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:

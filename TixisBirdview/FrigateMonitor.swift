@@ -11,6 +11,28 @@ import Observation
 import Security
 import SwiftUI
 
+struct FrigateLoginRequest {
+    static func make(baseURL: URL, username: String, password: String) throws -> URLRequest {
+        var request = URLRequest(url: baseURL.appending(path: "api/login"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: ["user": username, "password": password]
+        )
+        return request
+    }
+
+    static func sessionCookies(from response: HTTPURLResponse, for loginURL: URL) -> [HTTPCookie] {
+        let responseHeaders = response.allHeaderFields.reduce(into: [String: String]()) { result, entry in
+            guard let name = entry.key as? String, let value = entry.value as? String else {
+                return
+            }
+            result[name] = value
+        }
+        return HTTPCookie.cookies(withResponseHeaderFields: responseHeaders, for: loginURL)
+    }
+}
+
 @MainActor
 @Observable
 final class FrigateMonitor {
@@ -461,7 +483,7 @@ final class FrigateMonitor {
             self.eventDeliveryStatus = detail
         },
         onMessage: { [weak self] topic, payload in
-            self?.handleMqttMessage(topic: topic, payload: payload)
+            self?.receiveMqttMessage(topic: topic, payload: payload)
         }
     )
     @ObservationIgnored private lazy var mqttVerifier = MqttClient(
@@ -854,7 +876,7 @@ final class FrigateMonitor {
         mqttVerificationStatus = status
     }
 
-    private func handleMqttMessage(topic: String, payload: Data) {
+    func receiveMqttMessage(topic: String, payload: Data) {
         guard isMonitoring, eventDeliveryMode == .mqtt,
               let topicPrefix = try? Self.validatedMqttTopicPrefix(mqttTopicPrefix) else {
             return
@@ -1230,14 +1252,12 @@ final class FrigateMonitor {
             throw ServerAddressValidationError.invalidURL
         }
 
-        let loginURL = baseURL.appending(path: "api/login")
-        let body = try JSONSerialization.data(
-            withJSONObject: ["user": username, "password": password]
+        let request = try FrigateLoginRequest.make(
+            baseURL: baseURL,
+            username: username,
+            password: password
         )
-        var request = URLRequest(url: loginURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
+        let loginURL = request.url ?? baseURL
 
         let (_, response) = try await urlSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -1250,14 +1270,7 @@ final class FrigateMonitor {
             throw RequestError.httpStatus(httpResponse.statusCode)
         }
 
-        let responseHeaders = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, entry in
-            guard let name = entry.key as? String, let value = entry.value as? String else {
-                return
-            }
-
-            result[name] = value
-        }
-        let cookies = HTTPCookie.cookies(withResponseHeaderFields: responseHeaders, for: loginURL)
+        let cookies = FrigateLoginRequest.sessionCookies(from: httpResponse, for: loginURL)
         guard !cookies.isEmpty else {
             throw AuthenticationError.missingSessionCookie
         }

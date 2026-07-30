@@ -58,6 +58,12 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
     CODE_SIGNING_ALLOWED=NO test
   ```
 
+- Preserve the automated core-alert contracts: Frigate login request/cookie
+  handling, MQTT credentials and `events`/`reviews` subscriptions, MQTT event
+  to matching-camera popup routing, JPEG-preview to playable-MSE transition,
+  one-click dismissal, and a permanently non-key/non-main overlay. Tests must
+  remain local and must not need real credentials, cameras, or a broker.
+
 - Debug build:
 
   ```sh

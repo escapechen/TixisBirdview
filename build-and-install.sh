@@ -17,6 +17,7 @@ readonly DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develo
 readonly TEAM_ID="${TEAM_ID:-}"
 readonly BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/TixisBirdview-build.XXXXXX")"
 readonly DERIVED_DATA_PATH="$BUILD_ROOT/DerivedData"
+readonly TEST_DERIVED_DATA_PATH="$BUILD_ROOT/TestDerivedData"
 readonly BUILT_APP="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$SCHEME.app"
 readonly INSTALLED_APP="/Applications/$SCHEME.app"
 readonly STAGED_APP="/Applications/.$SCHEME.app.stage.$$"
@@ -27,6 +28,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
+usage() {
+    cat <<'EOF'
+Usage: ./build-and-install.sh [--test]
+
+Without arguments, runs the local XCTest suite, builds a signed app, and
+installs it in /Applications. --test only runs the XCTest suite; it does not
+need a Team ID, build an installable app, or use sudo.
+EOF
+}
+
+TEST_ONLY=false
+while (( $# > 0 )); do
+    case "$1" in
+        --test)
+            TEST_ONLY=true
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 if [[ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
     echo "Xcode was not found at: $DEVELOPER_DIR" >&2
     echo "Install Xcode or set DEVELOPER_DIR to its Contents/Developer directory." >&2
@@ -36,6 +66,24 @@ fi
 if [[ ! -d "$PROJECT_PATH" ]]; then
     echo "Project not found: $PROJECT_PATH" >&2
     exit 1
+fi
+
+run_tests() {
+    echo "Testing $SCHEME..."
+    "$DEVELOPER_DIR/usr/bin/xcodebuild" \
+        -project "$PROJECT_PATH" \
+        -scheme "$SCHEME" \
+        -configuration Debug \
+        -derivedDataPath "$TEST_DERIVED_DATA_PATH" \
+        CODE_SIGNING_ALLOWED=NO \
+        test
+}
+
+run_tests
+
+if [[ "$TEST_ONLY" == true ]]; then
+    echo "Tests passed. No app was built or installed."
+    exit 0
 fi
 
 detect_project_team_id() {
