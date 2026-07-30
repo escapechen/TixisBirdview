@@ -11,7 +11,6 @@ import SwiftUI
 struct VideoFeedView: View {
     let monitor: FrigateMonitor
     var onAspectRatioChanged: (CGFloat) -> Void
-    var onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -28,7 +27,7 @@ struct VideoFeedView: View {
         ZStack {
             content
             activityBadge
-            streamBadges
+            feedBadges
             overlayControls
         }
         .frame(minWidth: 240, minHeight: 150)
@@ -72,7 +71,9 @@ struct VideoFeedView: View {
 
     @ViewBuilder
     private var content: some View {
-        if monitor.feedMode == .stream, !isUsingJPEGFallback {
+        if monitor.feedMode == .stream,
+           !isUsingJPEGFallback,
+           monitor.shouldShowOverlay {
             ZStack {
                 jpegContent
 
@@ -81,11 +82,11 @@ struct VideoFeedView: View {
                     cameraName: monitor.currentFeedStreamName,
                     cookies: monitor.authenticationCookies(),
                     sessionID: monitor.streamSessionID,
+                    isVideoVisible: isLiveStreamReady,
                     startupTimeoutSeconds: monitor.liveStartupTimeoutSeconds,
                     debugEnabled: monitor.isLiveDebugEnabled,
                     errorMessage: $streamError,
                     onAspectRatioChanged: onAspectRatioChanged,
-                    onDismiss: onDismiss,
                     onConnected: {
                         isLiveStreamReady = true
                         liveStatus = "playing"
@@ -97,8 +98,7 @@ struct VideoFeedView: View {
                         liveStatus = status
                     }
                 )
-                .id("\(monitor.serverAddress)|\(monitor.currentFeedStreamName)|\(monitor.streamSessionID.uuidString)|\(monitor.liveStartupTimeoutSeconds)|\(monitor.isLiveDebugEnabled)")
-                .opacity(isLiveStreamReady ? 1 : 0)
+                .id("\(monitor.serverAddress)|\(monitor.currentFeedStreamName)|\(monitor.overlayPresentationID.uuidString)|\(monitor.streamSessionID.uuidString)|\(monitor.liveStartupTimeoutSeconds)|\(monitor.isLiveDebugEnabled)")
 
                 if let streamError {
                     Text(streamError)
@@ -145,7 +145,6 @@ struct VideoFeedView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onDismiss)
     }
 
     private var overlayControls: some View {
@@ -182,33 +181,55 @@ struct VideoFeedView: View {
     }
 
     @ViewBuilder
-    private var streamBadges: some View {
-        if monitor.feedMode == .stream {
-            VStack {
-                HStack {
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Text(isLiveStreamReady ? "LIVE VIDEO" : "JPEG PREVIEW")
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(
-                                isLiveStreamReady ? .green.opacity(0.78) : .blue.opacity(0.78),
-                                in: Capsule()
-                            )
-
-                        Text("MSE · \(liveStatus)")
-                            .foregroundStyle(.white.opacity(0.94))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.65), in: Capsule())
-                    }
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                }
-                .padding(10)
+    private var feedBadges: some View {
+        VStack {
+            HStack {
                 Spacer()
+                HStack(spacing: 6) {
+                    Text(feedBadgeTitle)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(feedBadgeColor, in: Capsule())
+
+                    Text(feedBadgeDetail)
+                        .foregroundStyle(.white.opacity(0.94))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.65), in: Capsule())
+                }
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
             }
-            .allowsHitTesting(false)
+            .padding(10)
+            Spacer()
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var feedBadgeTitle: String {
+        switch monitor.feedMode {
+        case .jpeg:
+            "JPEG SNAPSHOTS"
+        case .stream:
+            isLiveStreamReady ? "LIVE VIDEO" : "JPEG PREVIEW"
+        }
+    }
+
+    private var feedBadgeDetail: String {
+        switch monitor.feedMode {
+        case .jpeg:
+            "0.5s refresh"
+        case .stream:
+            "MSE · \(liveStatus)"
+        }
+    }
+
+    private var feedBadgeColor: Color {
+        switch monitor.feedMode {
+        case .jpeg:
+            .blue.opacity(0.78)
+        case .stream:
+            isLiveStreamReady ? .green.opacity(0.78) : .blue.opacity(0.78)
         }
     }
 

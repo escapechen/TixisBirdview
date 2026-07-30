@@ -74,7 +74,7 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
             return
         }
 
-        let panel = NSPanel(
+        let panel = OverlayDismissPanel(
             contentRect: NSRect(x: 0, y: 0, width: defaultWidth, height: defaultWidth / contentAspectRatio),
             styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
@@ -88,17 +88,17 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
         panel.level = .statusBar
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.hasShadow = true
+        panel.onPrimaryClick = { [weak monitor] in
+            monitor?.dismissOverlay()
+        }
 
         panel.contentView = NSHostingView(
             rootView: VideoFeedView(
                 monitor: monitor,
                 onAspectRatioChanged: { [weak self] aspectRatio in
                     self?.updateContentAspectRatio(aspectRatio)
-                },
-                onDismiss: { [weak monitor] in
-                    monitor?.dismissOverlay()
                 }
             )
         )
@@ -317,5 +317,78 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
             width: size.width,
             height: size.height
         )
+    }
+}
+
+final class OverlayDismissPanel: NSPanel {
+    var onPrimaryClick: (() -> Void)?
+
+    private var primaryMouseDownLocation: NSPoint?
+    private var didDragPrimaryMouse = false
+    private let clickMovementTolerance: CGFloat = 3
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            primaryMouseDownLocation = event.locationInWindow
+            didDragPrimaryMouse = false
+
+        case .leftMouseDragged:
+            if let primaryMouseDownLocation,
+               primaryMouseDownLocation.distance(to: event.locationInWindow) > clickMovementTolerance {
+                didDragPrimaryMouse = true
+            }
+
+        case .leftMouseUp:
+            let shouldDismiss = isPrimaryClick(event) && !isClickOnControl(event)
+            primaryMouseDownLocation = nil
+            didDragPrimaryMouse = false
+
+            super.sendEvent(event)
+
+            if shouldDismiss {
+                onPrimaryClick?()
+            }
+            return
+
+        default:
+            break
+        }
+
+        super.sendEvent(event)
+    }
+
+    private func isPrimaryClick(_ event: NSEvent) -> Bool {
+        guard event.buttonNumber == 0,
+              primaryMouseDownLocation != nil,
+              !didDragPrimaryMouse else {
+            return false
+        }
+
+        return true
+    }
+
+    private func isClickOnControl(_ event: NSEvent) -> Bool {
+        guard let contentView else {
+            return false
+        }
+
+        let location = contentView.convert(event.locationInWindow, from: nil)
+        var view = contentView.hitTest(location)
+
+        while let currentView = view {
+            if currentView is NSControl {
+                return true
+            }
+            view = currentView.superview
+        }
+
+        return false
+    }
+}
+
+private extension NSPoint {
+    func distance(to other: NSPoint) -> CGFloat {
+        hypot(x - other.x, y - other.y)
     }
 }

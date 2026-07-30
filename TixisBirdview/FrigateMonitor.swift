@@ -1164,11 +1164,24 @@ final class FrigateMonitor {
             defer { isLoadingLiveStreamNames = false }
 
             do {
-                liveStreamNames = try await fetchLiveStreamNames()
-                hasLoadedLiveStreamNames = true
+                applyLiveStreamNames(try await fetchLiveStreamNames())
             } catch {
                 // JPEG remains available if this optional live-stream lookup fails.
             }
+        }
+    }
+
+    func applyLiveStreamNames(_ streamNames: [String: String]) {
+        let activeCamera = currentFeedCameraName
+        let previousStreamName = currentFeedStreamName
+        liveStreamNames = streamNames
+        hasLoadedLiveStreamNames = true
+
+        // A popup may have started with its camera key before this lookup
+        // completed. Recreate the MSE player with the resolved go2rtc name.
+        if activeCamera == currentFeedCameraName,
+           currentFeedStreamName != previousStreamName {
+            streamSessionID = UUID()
         }
     }
 

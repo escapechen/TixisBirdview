@@ -101,6 +101,21 @@ struct SettingsMenuView: View {
 
     private var connectionSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
+            settingsCard(title: "Frigate connection", systemImage: "video") {
+                frigateConnectionSettings
+            }
+
+            settingsCard(title: "Event delivery", systemImage: "bolt.horizontal.circle") {
+                eventDeliverySettings
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 8)
+    }
+
+    private var frigateConnectionSettings: some View {
+        VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Server")
                     .font(.caption)
@@ -141,12 +156,7 @@ struct SettingsMenuView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-
-            eventDeliverySettings
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 2)
-        .padding(.vertical, 8)
     }
 
     private var feedAndSoundSettings: some View {
@@ -218,10 +228,11 @@ struct SettingsMenuView: View {
                 .foregroundStyle(.secondary)
 
             if monitor.eventDeliveryMode == .mqtt {
-                VStack(alignment: .leading, spacing: 6) {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
                     Text("MQTT broker")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline.weight(.semibold))
 
                     HStack(spacing: 8) {
                         TextField("Broker host", text: $mqttBrokerHostDraft)
@@ -234,13 +245,21 @@ struct SettingsMenuView: View {
 
                     Toggle("Use TLS", isOn: $mqttUsesTLSDraft)
 
-                    TextField("MQTT username (optional)", text: $mqttUsernameDraft)
+                    Text("MQTT login (optional)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("Username", text: $mqttUsernameDraft)
                         .textFieldStyle(.roundedBorder)
 
-                    SecureField("MQTT password", text: $mqttPasswordDraft)
+                    SecureField("Password", text: $mqttPasswordDraft)
                         .textFieldStyle(.roundedBorder)
 
-                    TextField("Topic prefix, e.g. frigate", text: $mqttTopicPrefixDraft)
+                    Text("Topic prefix")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("e.g. frigate", text: $mqttTopicPrefixDraft)
                         .textFieldStyle(.roundedBorder)
 
                     Text("MQTT credentials are stored in your macOS Keychain, separately for each broker.")
@@ -276,8 +295,28 @@ struct SettingsMenuView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.leading, 2)
             }
+        }
+    }
+
+    private func settingsCard<Content: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.48), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
         }
     }
 

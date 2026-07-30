@@ -49,6 +49,15 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
   the example file tracked. Do not infer the Team ID from a development
   certificate's displayed member ID.
 - Fast checks: `git diff --check` and `bash -n build-and-install.sh`.
+- After Swift behavior changes, run the XCTest suite:
+
+  ```sh
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
+    -project TixisBirdview.xcodeproj -scheme TixisBirdview -configuration Debug \
+    -derivedDataPath /private/tmp/TixisBirdview-DerivedData \
+    CODE_SIGNING_ALLOWED=NO test
+  ```
+
 - Debug build:
 
   ```sh

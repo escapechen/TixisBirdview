@@ -86,6 +86,21 @@ included when you share or update the project.
 5. Start **TixisBirdview** from Applications and complete the
    [first-time setup](../README.md#first-time-setup).
 
+## Test a source change
+
+If you modify the app, run its automated checks before building an installable
+copy:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
+  -project TixisBirdview.xcodeproj -scheme TixisBirdview -configuration Debug \
+  -derivedDataPath /private/tmp/TixisBirdview-DerivedData \
+  CODE_SIGNING_ALLOWED=NO test
+```
+
+This currently verifies live-feed click-to-dismiss behavior. It does not need
+your Apple signing certificate or access to a camera server.
+
 ## If the build fails
 
 | Message | Fix |

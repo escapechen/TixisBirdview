@@ -8,7 +8,15 @@
 
 /* Begin PBXFileReference section */
 		1FB45D363011597800AC56F6 /* TixisBirdview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TixisBirdview.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1FB45D4A3011597800AC56F6 /* TixisBirdviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TixisBirdviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1FB45D4B3011597800AC56F6 /* ClickToDismissWebViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClickToDismissWebViewTests.swift; sourceTree = "<group>"; };
+		1FB45D4C3011597800AC56F6 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXBuildFile section */
+		1FB45D4D3011597800AC56F6 /* ClickToDismissWebViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FB45D4B3011597800AC56F6 /* ClickToDismissWebViewTests.swift */; };
+		1FB45D4E3011597800AC56F6 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1FB45D4C3011597800AC56F6 /* XCTest.framework */; };
+/* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		1FB45D383011597800AC56F6 /* TixisBirdview */ = {
@@ -33,6 +41,8 @@
 			isa = PBXGroup;
 			children = (
 				1FB45D383011597800AC56F6 /* TixisBirdview */,
+				1FB45D4F3011597800AC56F6 /* TixisBirdviewTests */,
+				1FB45D503011597800AC56F6 /* Frameworks */,
 				1FB45D373011597800AC56F6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,8 +51,25 @@
 			isa = PBXGroup;
 			children = (
 				1FB45D363011597800AC56F6 /* TixisBirdview.app */,
+				1FB45D4A3011597800AC56F6 /* TixisBirdviewTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		1FB45D4F3011597800AC56F6 /* TixisBirdviewTests */ = {
+			isa = PBXGroup;
+			children = (
+				1FB45D4B3011597800AC56F6 /* ClickToDismissWebViewTests.swift */,
+			);
+			path = TixisBirdviewTests;
+			sourceTree = "<group>";
+		};
+		1FB45D503011597800AC56F6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1FB45D4C3011597800AC56F6 /* XCTest.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -70,7 +97,37 @@
 			productReference = 1FB45D363011597800AC56F6 /* TixisBirdview.app */;
 			productType = "com.apple.product-type.application";
 		};
+		1FB45D553011597800AC56F6 /* TixisBirdviewTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1FB45D5A3011597800AC56F6 /* Build configuration list for PBXNativeTarget "TixisBirdviewTests" */;
+			buildPhases = (
+				1FB45D563011597800AC56F6 /* Sources */,
+				1FB45D573011597800AC56F6 /* Frameworks */,
+				1FB45D583011597800AC56F6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1FB45D5C3011597800AC56F6 /* PBXTargetDependency */,
+			);
+			name = TixisBirdviewTests;
+			packageProductDependencies = (
+			);
+			productName = TixisBirdviewTests;
+			productReference = 1FB45D4A3011597800AC56F6 /* TixisBirdviewTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		1FB45D5B3011597800AC56F6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1FB45D2E3011597800AC56F6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1FB45D353011597800AC56F6;
+			remoteInfo = TixisBirdview;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		1FB45D2E3011597800AC56F6 /* Project object */ = {
@@ -82,6 +139,10 @@
 				TargetAttributes = {
 					1FB45D353011597800AC56F6 = {
 						CreatedOnToolsVersion = 26.6;
+					};
+					1FB45D553011597800AC56F6 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = 1FB45D353011597800AC56F6;
 					};
 				};
 			};
@@ -100,6 +161,7 @@
 			projectRoot = "";
 			targets = (
 				1FB45D353011597800AC56F6 /* TixisBirdview */,
+				1FB45D553011597800AC56F6 /* TixisBirdviewTests */,
 			);
 		};
 /* End PBXProject section */
@@ -112,7 +174,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1FB45D583011597800AC56F6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1FB45D573011597800AC56F6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FB45D4E3011597800AC56F6 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1FB45D323011597800AC56F6 /* Sources */ = {
@@ -122,7 +202,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1FB45D563011597800AC56F6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FB45D4D3011597800AC56F6 /* ClickToDismissWebViewTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1FB45D5C3011597800AC56F6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1FB45D353011597800AC56F6 /* TixisBirdview */;
+			targetProxy = 1FB45D5B3011597800AC56F6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		1FB45D413011597900AC56F6 /* Debug */ = {
@@ -333,6 +429,48 @@
 			};
 			name = Release;
 		};
+		1FB45D5D3011597800AC56F6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = org.tixisbirdview.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TixisBirdview.app/Contents/MacOS/TixisBirdview";
+				TEST_TARGET_NAME = TixisBirdview;
+			};
+			name = Debug;
+		};
+		1FB45D5E3011597800AC56F6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = org.tixisbirdview.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TixisBirdview.app/Contents/MacOS/TixisBirdview";
+				TEST_TARGET_NAME = TixisBirdview;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -350,6 +488,15 @@
 			buildConfigurations = (
 				1FB45D443011597900AC56F6 /* Debug */,
 				1FB45D453011597900AC56F6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1FB45D5A3011597800AC56F6 /* Build configuration list for PBXNativeTarget "TixisBirdviewTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1FB45D5D3011597800AC56F6 /* Debug */,
+				1FB45D5E3011597800AC56F6 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

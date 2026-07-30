@@ -12,11 +12,11 @@ struct FrigateMSEStreamView: NSViewRepresentable {
     let cameraName: String
     let cookies: [HTTPCookie]
     let sessionID: UUID
+    let isVideoVisible: Bool
     let startupTimeoutSeconds: Int
     let debugEnabled: Bool
     @Binding var errorMessage: String?
     let onAspectRatioChanged: (CGFloat) -> Void
-    let onDismiss: () -> Void
     let onConnected: () -> Void
     let onFallbackToJPEG: () -> Void
     let onStatusChanged: (String) -> Void
@@ -32,12 +32,14 @@ struct FrigateMSEStreamView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "frigateMSE")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.alphaValue = isVideoVisible ? 1 : 0.01
         webView.navigationDelegate = context.coordinator
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
+        webView.alphaValue = isVideoVisible ? 1 : 0.01
 
         guard let serverURL else {
             errorMessage = "Enter a Frigate server address first."
@@ -110,6 +112,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             var pending = [];
             var pendingBytes = 0;
             var firstFrameTimer;
+            var socketOpenTimer;
             var restartTimer;
             var stablePlaybackTimer;
             var shouldReconnect = true;
@@ -138,6 +141,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               debug("live player permanently unavailable");
               shouldReconnect = false;
               clearTimeout(firstFrameTimer);
+              clearTimeout(socketOpenTimer);
               clearTimeout(restartTimer);
               clearTimeout(stablePlaybackTimer);
               closeSocket();
@@ -153,10 +157,6 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 });
               }
             }
-
-            video.addEventListener("click", () => {
-              window.webkit?.messageHandlers?.frigateMSE?.postMessage({ type: "dismiss" });
-            });
 
             video.addEventListener("loadeddata", () => {
               clearTimeout(firstFrameTimer);
@@ -215,6 +215,8 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               isRecovering = true;
               clearTimeout(firstFrameTimer);
               firstFrameTimer = undefined;
+              clearTimeout(socketOpenTimer);
+              socketOpenTimer = undefined;
               clearTimeout(stablePlaybackTimer);
               recoveryAttempts += 1;
               status(`retrying (${recoveryAttempts})`);
@@ -313,9 +315,17 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 return;
               }
               currentSocket.binaryType = "arraybuffer";
+              clearTimeout(socketOpenTimer);
+              socketOpenTimer = setTimeout(() => {
+                if (socket === currentSocket && currentSocket.readyState !== WebSocket.OPEN) {
+                  recover("Live stream connection timed out.");
+                }
+              }, startupTimeoutMs);
 
               currentSocket.onopen = () => {
                 if (socket !== currentSocket || !shouldReconnect) return;
+                clearTimeout(socketOpenTimer);
+                socketOpenTimer = undefined;
                 status("socket connected");
                 mediaSource = new MediaSourceConstructor();
                 mediaSource.addEventListener("sourceopen", () => {
@@ -396,10 +406,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             window.addEventListener("pagehide", () => {
               shouldReconnect = false;
               clearTimeout(firstFrameTimer);
+              clearTimeout(socketOpenTimer);
               clearTimeout(restartTimer);
               clearTimeout(stablePlaybackTimer);
               closeSocket();
             });
+            status("starting player");
             start();
           </script>
         </body>
@@ -450,8 +462,6 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             case "connected":
                 parent.errorMessage = nil
                 parent.onConnected()
-            case "dismiss":
-                parent.onDismiss()
             case "fallback":
                 parent.errorMessage = body["message"] as? String
                 parent.onFallbackToJPEG()
