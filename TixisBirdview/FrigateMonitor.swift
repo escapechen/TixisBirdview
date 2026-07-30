@@ -539,10 +539,10 @@ final class FrigateMonitor {
             ? true
             : UserDefaults.standard.bool(forKey: Self.mqttUsesTLSKey)
         mqttUsername = UserDefaults.standard.string(forKey: Self.mqttUsernameKey) ?? ""
-        mqttTopicPrefix = UserDefaults.standard.string(forKey: Self.mqttTopicPrefixKey) ?? "frigate"
-        if mqttTopicPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            mqttTopicPrefix = "frigate"
-        }
+        let savedMqttTopicPrefix = UserDefaults.standard.string(forKey: Self.mqttTopicPrefixKey) ?? "frigate"
+        mqttTopicPrefix = savedMqttTopicPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "frigate"
+            : savedMqttTopicPrefix
         popupTrigger = PopupTrigger(rawValue: UserDefaults.standard.string(forKey: Self.popupTriggerKey) ?? "") ?? .selectedClassifications
         isSoundAlertEnabled = UserDefaults.standard.bool(forKey: Self.soundAlertEnabledKey)
         alertSound = AlertSound(rawValue: UserDefaults.standard.string(forKey: Self.alertSoundKey) ?? "") ?? .purr
@@ -852,6 +852,29 @@ final class FrigateMonitor {
         isMqttVerificationInProgress = false
         mqttVerifier.stop()
         mqttVerificationStatus = status
+    }
+
+    private func handleMqttMessage(topic: String, payload: Data) {
+        guard isMonitoring, eventDeliveryMode == .mqtt,
+              let topicPrefix = try? Self.validatedMqttTopicPrefix(mqttTopicPrefix) else {
+            return
+        }
+
+        let decoder = JSONDecoder()
+        switch topic {
+        case "\(topicPrefix)/events":
+            guard let event = try? decoder.decode(MqttEnvelope<FrigateEvent>.self, from: payload).after else {
+                return
+            }
+            handle(events: [event])
+        case "\(topicPrefix)/reviews":
+            guard let review = try? decoder.decode(MqttEnvelope<FrigateReviewItem>.self, from: payload).after else {
+                return
+            }
+            handle(reviewItems: [review])
+        default:
+            return
+        }
     }
 
     private func pollActivity() async {
@@ -1279,6 +1302,38 @@ final class FrigateMonitor {
         username = normalizedUsername
     }
 
+    private func updateMqttCredentials(host: String, username newUsername: String, password: String) throws {
+        let normalizedUsername = newUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousHost = mqttBrokerHost
+        let previousUsername = mqttUsername
+
+        if normalizedUsername.isEmpty {
+            guard password.isEmpty else {
+                throw MqttConfigurationError.passwordWithoutUsername
+            }
+            if !previousHost.isEmpty, !previousUsername.isEmpty {
+                try Self.deleteMqttPassword(host: previousHost, username: previousUsername)
+            }
+            mqttUsername = ""
+            return
+        }
+
+        if password.isEmpty {
+            guard try Self.savedMqttPassword(host: host, username: normalizedUsername) != nil else {
+                throw MqttConfigurationError.missingPassword
+            }
+        } else {
+            try Self.saveMqttPassword(password, host: host, username: normalizedUsername)
+        }
+
+        if (previousHost != host || previousUsername != normalizedUsername),
+           !previousHost.isEmpty,
+           !previousUsername.isEmpty {
+            try Self.deleteMqttPassword(host: previousHost, username: previousUsername)
+        }
+        mqttUsername = normalizedUsername
+    }
+
     private func resetAuthenticatedSession() {
         urlSession.invalidateAndCancel()
         urlSession = Self.makeURLSession()
@@ -1353,6 +1408,67 @@ final class FrigateMonitor {
         }
     }
 
+    private static func savedMqttPassword(host: String, username: String) throws -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: mqttKeychainServiceName(for: host),
+            kSecAttrAccount as String: username,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let password = String(data: data, encoding: .utf8) else {
+            throw MqttConfigurationError.keychain(status)
+        }
+
+        return password
+    }
+
+    private static func saveMqttPassword(_ password: String, host: String, username: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: mqttKeychainServiceName(for: host),
+            kSecAttrAccount as String: username,
+        ]
+        let data = Data(password.utf8)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+
+        if status == errSecItemNotFound {
+            var newItem = query
+            newItem[kSecValueData as String] = data
+            newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            let addStatus = SecItemAdd(newItem as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw MqttConfigurationError.keychain(addStatus)
+            }
+        } else if status != errSecSuccess {
+            throw MqttConfigurationError.keychain(status)
+        }
+    }
+
+    private static func deleteMqttPassword(host: String, username: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: mqttKeychainServiceName(for: host),
+            kSecAttrAccount as String: username,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw MqttConfigurationError.keychain(status)
+        }
+    }
+
+    private static func mqttKeychainServiceName(for host: String) -> String {
+        "\(mqttKeychainService).\(host.lowercased())"
+    }
+
     private static func normalizedServerAddress(_ address: String) -> String {
         let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedAddress.isEmpty else {
@@ -1417,6 +1533,66 @@ final class FrigateMonitor {
         return normalizedAddress
     }
 
+    private static func validatedMqttHost(_ host: String) throws -> String {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            throw MqttConfigurationError.missingHost
+        }
+        guard !trimmedHost.contains(where: { $0.isWhitespace }),
+              !trimmedHost.contains("://"),
+              !trimmedHost.contains("/"),
+              !trimmedHost.contains("?"),
+              !trimmedHost.contains("#"),
+              !trimmedHost.contains("@") else {
+            throw MqttConfigurationError.invalidHost
+        }
+
+        let normalizedHost: String
+        if trimmedHost.hasPrefix("[") || trimmedHost.hasSuffix("]") {
+            guard trimmedHost.hasPrefix("["),
+                  trimmedHost.hasSuffix("]"),
+                  trimmedHost.count > 2 else {
+                throw MqttConfigurationError.invalidHost
+            }
+            normalizedHost = String(trimmedHost.dropFirst().dropLast())
+        } else {
+            normalizedHost = trimmedHost
+        }
+
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-:"))
+        guard normalizedHost.unicodeScalars.allSatisfy({ allowedCharacters.contains($0) }),
+              !normalizedHost.hasPrefix("."),
+              !normalizedHost.hasSuffix("."),
+              !normalizedHost.contains("..") else {
+            throw MqttConfigurationError.invalidHost
+        }
+
+        if normalizedHost.contains(":") {
+            // A single colon is a host-and-port separator, not a valid IPv6 address.
+            guard normalizedHost.filter({ $0 == ":" }).count >= 2 else {
+                throw MqttConfigurationError.invalidHost
+            }
+        }
+
+        return normalizedHost.lowercased()
+    }
+
+    private static func validatedMqttTopicPrefix(_ topicPrefix: String) throws -> String {
+        let normalizedPrefix = topicPrefix
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !normalizedPrefix.isEmpty,
+              !normalizedPrefix.contains(where: { $0.isWhitespace || $0.isNewline }),
+              !normalizedPrefix.contains("#"),
+              !normalizedPrefix.contains("+"),
+              !normalizedPrefix.contains("\0"),
+              !normalizedPrefix.split(separator: "/", omittingEmptySubsequences: false).contains(where: \.isEmpty) else {
+            throw MqttConfigurationError.missingTopicPrefix
+        }
+
+        return normalizedPrefix
+    }
+
     private static func statusMessage(for error: Error) -> String {
         let nsError = error as NSError
 
@@ -1433,6 +1609,10 @@ final class FrigateMonitor {
 
         return error.localizedDescription
     }
+}
+
+private struct MqttEnvelope<Payload: Decodable>: Decodable {
+    let after: Payload?
 }
 
 struct FrigateEvent: Decodable, Identifiable, Hashable {

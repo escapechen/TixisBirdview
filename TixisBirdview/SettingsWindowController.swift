@@ -28,7 +28,7 @@ final class SettingsWindowController {
 
         let hostingController = NSHostingController(
             rootView: SettingsMenuView(monitor: monitor)
-                .frame(width: 360)
+                .frame(width: 440, height: 700)
         )
 
         let window = NSWindow(contentViewController: hostingController)

@@ -13,9 +13,22 @@ struct SettingsMenuView: View {
     @State private var serverAddressDraft = ""
     @State private var usernameDraft = ""
     @State private var passwordDraft = ""
+    @State private var mqttBrokerHostDraft = ""
+    @State private var mqttBrokerPortDraft = 1883
+    @State private var mqttUsesTLSDraft = false
+    @State private var mqttUsernameDraft = ""
+    @State private var mqttPasswordDraft = ""
+    @State private var mqttTopicPrefixDraft = "frigate"
     @State private var classificationDraft = ""
     @State private var isClassificationPickerPresented = false
     @State private var classificationPickerSelections = Set<String>()
+    @State private var selectedSettingsTab = SettingsTab.connection
+
+    private enum SettingsTab: Hashable {
+        case connection
+        case feedAndSound
+        case popupTriggers
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -32,6 +45,12 @@ struct SettingsMenuView: View {
             serverAddressDraft = monitor.serverAddress
             usernameDraft = monitor.username
             passwordDraft = ""
+            mqttBrokerHostDraft = monitor.mqttBrokerHost
+            mqttBrokerPortDraft = monitor.mqttBrokerPort
+            mqttUsesTLSDraft = monitor.mqttUsesTLS
+            mqttUsernameDraft = monitor.mqttUsername
+            mqttPasswordDraft = ""
+            mqttTopicPrefixDraft = monitor.mqttTopicPrefix
             monitor.refreshAvailableClassifications()
         }
     }
@@ -53,6 +72,34 @@ struct SettingsMenuView: View {
     }
 
     private var settings: some View {
+        TabView(selection: $selectedSettingsTab) {
+            ScrollView {
+                connectionSettings
+            }
+            .tabItem {
+                Label("Connection", systemImage: "network")
+            }
+            .tag(SettingsTab.connection)
+
+            ScrollView {
+                feedAndSoundSettings
+            }
+            .tabItem {
+                Label("Feed & Sound", systemImage: "video")
+            }
+            .tag(SettingsTab.feedAndSound)
+
+            ScrollView {
+                popupTriggerSettings
+            }
+            .tabItem {
+                Label("Popup Triggers", systemImage: "bell.badge")
+            }
+            .tag(SettingsTab.popupTriggers)
+        }
+    }
+
+    private var connectionSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Server")
@@ -95,12 +142,21 @@ struct SettingsMenuView: View {
                     .foregroundStyle(.secondary)
             }
 
+            eventDeliverySettings
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 8)
+    }
+
+    private var feedAndSoundSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Feed")
+                .font(.headline)
+
             Stepper(value: $monitor.overlayDurationSeconds, in: 5...120, step: 5) {
                 Text("Keep feed open: \(Int(monitor.overlayDurationSeconds)) seconds")
             }
-
-            popupCooldownSettings
-            soundAlertSettings
 
             Picker("Feed", selection: $monitor.feedMode) {
                 ForEach(FrigateMonitor.FeedMode.allCases) { mode in
@@ -127,7 +183,101 @@ struct SettingsMenuView: View {
                     .help("Writes concise playback state transitions to the terminal where TixisBirdview was started. It excludes server addresses, camera names, credentials, cookies, and tokens.")
             }
 
+            Divider()
+
+            Text("Sound alerts")
+                .font(.headline)
+
+            soundAlertSettings
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 8)
+    }
+
+    private var popupTriggerSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            popupCooldownSettings
             classificationSettings
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 8)
+    }
+
+    private var eventDeliverySettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Event delivery", selection: $monitor.eventDeliveryMode) {
+                ForEach(FrigateMonitor.EventDeliveryMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+
+            Text(monitor.eventDeliveryMode.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if monitor.eventDeliveryMode == .mqtt {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("MQTT broker")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        TextField("Broker host", text: $mqttBrokerHostDraft)
+                            .textFieldStyle(.roundedBorder)
+
+                        TextField("Port", value: $mqttBrokerPortDraft, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 72)
+                    }
+
+                    Toggle("Use TLS", isOn: $mqttUsesTLSDraft)
+
+                    TextField("MQTT username (optional)", text: $mqttUsernameDraft)
+                        .textFieldStyle(.roundedBorder)
+
+                    SecureField("MQTT password", text: $mqttPasswordDraft)
+                        .textFieldStyle(.roundedBorder)
+
+                    TextField("Topic prefix, e.g. frigate", text: $mqttTopicPrefixDraft)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("MQTT credentials are stored in your macOS Keychain, separately for each broker.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    HStack {
+                        Button("Apply MQTT") {
+                            applyMqttSettings()
+                        }
+
+                        Button("Verify") {
+                            if applyMqttSettings() {
+                                monitor.verifyMqttConnection()
+                            }
+                        }
+                        .disabled(monitor.isMqttVerificationInProgress)
+
+                        if monitor.isMqttVerificationInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+
+                    if let mqttVerificationStatus = monitor.mqttVerificationStatus {
+                        Text(mqttVerificationStatus)
+                            .font(.caption2)
+                            .foregroundStyle(mqttVerificationStatus.contains("failed") || mqttVerificationStatus.contains("not applied") ? .red : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text(monitor.eventDeliveryStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, 2)
+            }
         }
     }
 
@@ -334,6 +484,30 @@ struct SettingsMenuView: View {
             passwordDraft = ""
             monitor.refreshAvailableClassifications()
         }
+    }
+
+    @discardableResult
+    private func applyMqttSettings() -> Bool {
+        let didApply = monitor.applyMqttSettings(
+            host: mqttBrokerHostDraft,
+            port: mqttBrokerPortDraft,
+            useTLS: mqttUsesTLSDraft,
+            username: mqttUsernameDraft,
+            password: mqttPasswordDraft,
+            topicPrefix: mqttTopicPrefixDraft
+        )
+
+        guard didApply else {
+            return false
+        }
+
+        mqttBrokerHostDraft = monitor.mqttBrokerHost
+        mqttBrokerPortDraft = monitor.mqttBrokerPort
+        mqttUsesTLSDraft = monitor.mqttUsesTLS
+        mqttUsernameDraft = monitor.mqttUsername
+        mqttPasswordDraft = ""
+        mqttTopicPrefixDraft = monitor.mqttTopicPrefix
+        return true
     }
 
     private func addClassification() {

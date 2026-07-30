@@ -12,11 +12,14 @@ above your work without taking keyboard focus.
 Built by [Marcel Kühn](AUTHORS.md) with OpenAI Codex (GPT-5.6 Terra, Extra
 High reasoning).
 
-![A TixisBirdview activity popup showing Tixi the cat](docs/cat-detected.jpg)
+<p align="center">
+  <img src="docs/tixi-birdview-hero.png" alt="Illustration of Tixi, the TixisBirdview cat" width="836">
+</p>
 
 ## What it does
 
-- Watches recent Frigate events and review activity every two seconds.
+- Checks Frigate events and review activity every two seconds by HTTP, or can
+  receive them immediately from its MQTT broker.
 - Opens a movable, timed feed for selected classifications, for example
   `person`, `cat`, or `Tixi`.
 - Shows the detected label, confidence, camera, a countdown, and either JPEG
@@ -28,8 +31,6 @@ High reasoning).
 - Remembers the feed's width and display position, then adapts its height to
   each camera's aspect ratio. The feed does not take focus from the app you
   are using.
-
-![TixisBirdview menu](docs/tray.jpg)
 
 ## Install from source — no Swift knowledge required
 
@@ -65,18 +66,25 @@ compatible choice and remain available if live video is unavailable.
 
 Open the ![Tixi menu-bar icon](TixisBirdview/Assets.xcassets/TixiMenuBar.imageset/tixi-menu-18@2x.png) icon in the menu bar, then choose **Settings**.
 
-![TixisBirdview Settings](docs/settings.jpg)
+Settings are grouped into three tabs. These screenshots use only example
+addresses and no real credentials.
 
-1. Enter the Frigate server URL and choose **Apply**.
-2. If Frigate uses login, enter the username and password. The password goes
-   into your macOS Keychain; it is not written to TixisBirdview's preferences.
-3. Set **Keep feed open** to the number of seconds you want the popup visible.
-4. Optionally enable **Popup cooldown** and/or **Sound cooldown**, then enter
-   the number of seconds to suppress each type of repeated automatic alert.
-   Manual **Show Feed** remains immediate.
-5. Optionally enable **Sound alert**, select a sound, set its volume, and use
-   **Preview** to test it.
-6. Choose a feed mode:
+<p align="center">
+  <img src="docs/settings-connection-mqtt.png" alt="Connection tab with MQTT broker settings" width="31%">
+  <img src="docs/settings-feed-sound.png" alt="Feed and Sound tab" width="31%">
+  <img src="docs/settings-popup-triggers.png" alt="Popup Triggers tab" width="31%">
+</p>
+
+1. On **Connection**, enter the Frigate server URL and choose **Apply**. If
+   Frigate uses login, enter its username and password. The password goes into
+   your macOS Keychain; it is not written to TixisBirdview's preferences.
+2. Under **Event delivery**, keep **HTTP polling** for the compatible default,
+   or choose **MQTT** for faster event delivery. For MQTT, enter the broker
+   host, port, TLS choice, optional credentials, and Frigate topic prefix
+   (normally `frigate`), then choose **Apply MQTT** and **Verify**. MQTT
+   credentials are stored separately in the macOS Keychain.
+3. On **Feed & Sound**, set **Keep feed open** to the number of seconds you
+   want the popup visible, then choose a feed mode:
    - **JPEG snapshots**: reliable, updated twice per second.
    - **Live stream**: lower latency go2rtc video when the camera supports it.
    When using **Live stream**, choose **Retry live player after** (1–15
@@ -87,10 +95,15 @@ Open the ![Tixi menu-bar icon](TixisBirdview/Assets.xcassets/TixiMenuBar.imagese
    key-frame interval. Enable **Write live-player diagnostics to terminal
    output** when troubleshooting; its concise state lines intentionally omit
    server addresses, camera names, credentials, cookies, and tokens.
-7. Choose **Popup for**:
+4. Still on **Feed & Sound**, optionally enable **Sound alert**, select a
+   sound, set its volume, and use **Preview** to test it. **Sound cooldown**
+   appears once sound is enabled and suppresses repeated automatic sounds.
+5. On **Popup Triggers**, optionally enable **Popup cooldown** to suppress
+   repeated automatic popups. Manual **Show Feed** remains immediate. Choose
+   **Popup for**:
    - **Selected classifications**: only selected names open a feed.
    - **Any tracked object**: every Frigate object event opens a feed.
-8. Add the names you want. Use the refresh icon, then **Choose…**, to select
+6. Add the names you want. Use the refresh icon, then **Choose…**, to select
    one or more labels and sub-labels Frigate has already seen. You can always
    add a custom value such as `Tixi` yourself.
 
@@ -119,8 +132,8 @@ filters them by their object classification.
 
 | Problem | What to check |
 | --- | --- |
-| Menu-bar icon is red | Confirm the URL, Frigate availability, macOS TLS trust, and login details. TixisBirdview shows a short connection-lost/restored message when the state changes. |
-| No popup | Make sure monitoring is not paused. Temporarily select **Any tracked object**, then check the status line for the last activity Frigate sent. |
+| Menu-bar icon is red | Confirm the URL, Frigate availability, macOS TLS trust, and login details. When using MQTT, also check the Connection tab's delivery status and broker settings. TixisBirdview shows a short connection-lost/restored message when the state changes. |
+| No popup | Make sure monitoring is not paused. Temporarily select **Any tracked object**, then check the status line for the last activity Frigate sent. With MQTT selected, use **Verify** in the Connection tab first. |
 | A name never triggers | Add the exact event label or sub-label shown in Frigate. A Birdseye image without a new event does not count. |
 | Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream. JPEG is loaded immediately while MSE keeps connecting in the background; reduce **Retry live player after** to retry sooner. |
 | Feed is on the wrong screen | Drag it once to the intended display. Its position is saved. |
