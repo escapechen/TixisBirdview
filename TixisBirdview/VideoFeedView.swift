@@ -30,6 +30,12 @@ enum FeedPlaybackState: Equatable {
     }
 }
 
+enum FeedOverlayLayout {
+    static let controlsBottomInset: CGFloat = 8
+    static let controlsHeight: CGFloat = 28
+    static let statusNoticeBottomInset: CGFloat = controlsBottomInset + controlsHeight + 18
+}
+
 struct VideoFeedView: View {
     let monitor: FrigateMonitor
     var onAspectRatioChanged: (CGFloat) -> Void
@@ -119,31 +125,32 @@ struct VideoFeedView: View {
                     }
                 )
                 .id("\(monitor.serverAddress)|\(monitor.currentFeedStreamName)|\(monitor.overlayPresentationID.uuidString)|\(monitor.streamSessionID.uuidString)|\(monitor.liveStartupTimeoutSeconds)|\(monitor.isLiveDebugEnabled)")
-
+            }
+            .overlay(alignment: .bottom) {
                 if let streamError {
-                    Text(streamError)
-                        .font(.callout)
-                        .foregroundStyle(.white.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(12)
-                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .padding()
+                    streamWarning(streamError)
                 }
             }
         } else {
             jpegContent
-                .overlay(alignment: .center) {
+                .overlay(alignment: .bottom) {
                     if isUsingJPEGFallback {
-                        Text("Live stream unavailable. Showing JPEG snapshots.")
-                            .font(.callout)
-                            .foregroundStyle(.white.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(12)
-                            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .padding()
+                        streamWarning("Live stream unavailable. Showing JPEG snapshots.")
                     }
                 }
         }
+    }
+
+    private func streamWarning(_ message: String) -> some View {
+        Text(message)
+            .font(.callout)
+            .foregroundStyle(.white.secondary)
+            .multilineTextAlignment(.center)
+            .padding(12)
+            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 24)
+            .padding(.bottom, FeedOverlayLayout.statusNoticeBottomInset)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -202,7 +209,7 @@ struct VideoFeedView: View {
                     .accessibilityLabel("Close feed")
                     .help("Close feed")
                 }
-                .padding(8)
+                .padding(FeedOverlayLayout.controlsBottomInset)
             }
         }
     }

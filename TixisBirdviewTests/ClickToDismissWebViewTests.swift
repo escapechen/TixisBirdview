@@ -87,6 +87,34 @@ final class OverlayDismissPanelTests: XCTestCase {
 }
 
 @MainActor
+final class OverlayFramePersistenceGateTests: XCTestCase {
+    func testProgrammaticFrameChangesNeverPersistGeometry() {
+        let gate = OverlayFramePersistenceGate()
+
+        gate.beginProgrammaticChange()
+
+        XCTAssertFalse(gate.allowsPersistence)
+
+        gate.endProgrammaticChange()
+
+        XCTAssertTrue(gate.allowsPersistence)
+    }
+
+    func testNestedProgrammaticFrameChangesRemainSuppressedUntilTheAnimationFinishes() {
+        let gate = OverlayFramePersistenceGate()
+
+        gate.beginProgrammaticChange()
+        gate.perform {}
+
+        XCTAssertFalse(gate.allowsPersistence)
+
+        gate.endProgrammaticChange()
+
+        XCTAssertTrue(gate.allowsPersistence)
+    }
+}
+
+@MainActor
 final class LiveStreamRoutingTests: XCTestCase {
     func testResolvedStreamNameRestartsTheLivePlayer() {
         let monitor = FrigateMonitor()
@@ -238,6 +266,13 @@ final class MqttEventToOverlayTests: XCTestCase {
 }
 
 final class FeedPlaybackStateTests: XCTestCase {
+    func testLiveStatusNoticeClearsTheFeedControls() {
+        XCTAssertGreaterThan(
+            FeedOverlayLayout.statusNoticeBottomInset,
+            FeedOverlayLayout.controlsBottomInset + FeedOverlayLayout.controlsHeight
+        )
+    }
+
     func testLiveMSELatencyPolicyPrioritizesFreshFrames() {
         XCTAssertLessThanOrEqual(LiveStreamLatencyPolicy.maximumBufferedSeconds, 1.5)
         XCTAssertLessThan(LiveStreamLatencyPolicy.retainedBufferedSeconds, LiveStreamLatencyPolicy.maximumBufferedSeconds)
