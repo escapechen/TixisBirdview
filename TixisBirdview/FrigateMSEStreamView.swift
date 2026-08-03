@@ -8,13 +8,15 @@ import SwiftUI
 import WebKit
 
 enum LiveStreamLatencyPolicy {
-    /// Alert overlays favour freshness over smoothing through a weak connection.
-    static let maximumBufferedSeconds = 1.5
-    static let retainedBufferedSeconds = 0.75
-    static let targetLatencySeconds = 0.35
-    static let softCatchUpThresholdSeconds = 0.75
-    static let hardCatchUpThresholdSeconds = 1.5
+    /// Keep enough complete media for WebKit to decode a camera GOP; control
+    /// latency with the playhead, not aggressive SourceBuffer eviction.
+    static let maximumBufferedSeconds = 6.0
+    static let retainedBufferedSeconds = 5.0
+    static let targetLatencySeconds = 1.0
+    static let softCatchUpThresholdSeconds = 1.5
+    static let hardCatchUpThresholdSeconds = 2.5
     static let maximumCatchUpPlaybackRate = 1.25
+    static let maximumConsecutiveRecoveryAttempts = 3
 }
 
 struct FrigateMSEStreamView: NSViewRepresentable {
@@ -118,6 +120,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             const softCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.softCatchUpThresholdSeconds);
             const hardCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds);
             const maximumCatchUpPlaybackRate = \(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate);
+            const maxRecoveryAttempts = \(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts);
             const maxPendingBytes = 2 * 1024 * 1024;
             const reconnectDelay = 1500;
             var socket;
@@ -234,8 +237,12 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               socketOpenTimer = undefined;
               clearTimeout(stablePlaybackTimer);
               recoveryAttempts += 1;
+              if (recoveryAttempts >= maxRecoveryAttempts) {
+                fallback("Live video could not stay playable. Showing JPEG snapshots for this alert.");
+                return;
+              }
               status(`retrying (${recoveryAttempts})`);
-              debug(`recovery attempt ${recoveryAttempts}`);
+              debug(`recovery attempt ${recoveryAttempts}: ${reason}`);
               report(`${reason} JPEG snapshots remain visible while live video retries.`);
               closeSocket();
               resetMediaSource();

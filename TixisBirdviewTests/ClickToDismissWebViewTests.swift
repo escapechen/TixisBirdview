@@ -274,14 +274,15 @@ final class FeedPlaybackStateTests: XCTestCase {
     }
 
     func testLiveMSELatencyPolicyPrioritizesFreshFrames() {
-        XCTAssertLessThanOrEqual(LiveStreamLatencyPolicy.maximumBufferedSeconds, 1.5)
+        XCTAssertGreaterThanOrEqual(LiveStreamLatencyPolicy.retainedBufferedSeconds, 5)
         XCTAssertLessThan(LiveStreamLatencyPolicy.retainedBufferedSeconds, LiveStreamLatencyPolicy.maximumBufferedSeconds)
-        XCTAssertLessThan(LiveStreamLatencyPolicy.targetLatencySeconds, LiveStreamLatencyPolicy.retainedBufferedSeconds)
+        XCTAssertLessThanOrEqual(LiveStreamLatencyPolicy.targetLatencySeconds, 1)
         XCTAssertLessThanOrEqual(
             LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds,
             LiveStreamLatencyPolicy.maximumBufferedSeconds
         )
         XCTAssertGreaterThan(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate, 1)
+        XCTAssertEqual(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts, 3)
     }
 
     func testStreamStartsAsJPEGBeforeMSEBecomesPlayable() {
