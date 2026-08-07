@@ -17,9 +17,13 @@ enum FeedPlaybackState: Equatable {
         feedMode: FrigateMonitor.FeedMode,
         isOverlayVisible: Bool,
         isUsingJPEGFallback: Bool,
-        isLiveStreamReady: Bool
+        isLiveStreamReady: Bool,
+        isLiveStreamRoutingReady: Bool
     ) -> Self {
-        guard feedMode == .stream, isOverlayVisible, !isUsingJPEGFallback else {
+        guard feedMode == .stream,
+              isOverlayVisible,
+              !isUsingJPEGFallback,
+              isLiveStreamRoutingReady else {
             return .jpegSnapshots
         }
         return isLiveStreamReady ? .liveVideo : .jpegPreview
@@ -64,6 +68,12 @@ struct VideoFeedView: View {
         .onAppear {
             updateFeedMode()
             animateActivityBadge()
+        }
+        .task(id: "\(monitor.overlayPresentationID.uuidString)|\(monitor.currentFeedCameraName)|\(monitor.feedMode.rawValue)") {
+            guard monitor.feedMode == .stream else {
+                return
+            }
+            await monitor.ensureLiveStreamNamesLoaded()
         }
         .onChange(of: monitor.feedMode) {
             isUsingJPEGFallback = false
@@ -136,6 +146,9 @@ struct VideoFeedView: View {
                 .overlay(alignment: .bottom) {
                     if isUsingJPEGFallback {
                         streamWarning("Live stream unavailable. Showing JPEG snapshots.")
+                    } else if monitor.feedMode == .stream,
+                              monitor.liveStreamRoutingStatus == .unavailable {
+                        streamWarning("Live stream routing unavailable. Showing JPEG snapshots.")
                     }
                 }
         }
@@ -256,7 +269,14 @@ struct VideoFeedView: View {
         case .jpeg:
             "0.5s refresh"
         case .stream:
-            "MSE · \(liveStatus)"
+            switch monitor.liveStreamRoutingStatus {
+            case .resolving:
+                "MSE · resolving"
+            case .ready:
+                "MSE · \(liveStatus)"
+            case .unavailable:
+                "MSE · unavailable"
+            }
         }
     }
 
@@ -357,7 +377,8 @@ struct VideoFeedView: View {
             feedMode: monitor.feedMode,
             isOverlayVisible: monitor.shouldShowOverlay,
             isUsingJPEGFallback: isUsingJPEGFallback,
-            isLiveStreamReady: isLiveStreamReady
+            isLiveStreamReady: isLiveStreamReady,
+            isLiveStreamRoutingReady: monitor.liveStreamRoutingStatus == .ready
         )
     }
 

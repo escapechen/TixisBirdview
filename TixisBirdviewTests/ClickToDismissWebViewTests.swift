@@ -123,6 +123,7 @@ final class LiveStreamRoutingTests: XCTestCase {
         monitor.applyLiveStreamNames(["birdseye": "go2rtc_birdseye"])
 
         XCTAssertEqual(monitor.currentFeedStreamName, "go2rtc_birdseye")
+        XCTAssertEqual(monitor.liveStreamRoutingStatus, .ready)
         XCTAssertNotEqual(monitor.streamSessionID, initialSessionID)
     }
 
@@ -133,6 +134,68 @@ final class LiveStreamRoutingTests: XCTestCase {
         monitor.applyLiveStreamNames(["birdseye": "birdseye"])
 
         XCTAssertEqual(monitor.streamSessionID, initialSessionID)
+    }
+
+    func testUnmappedCameraNeverStartsMSEWithItsEventKey() {
+        let monitor = FrigateMonitor()
+
+        monitor.applyLiveStreamNames(["other_camera": "go2rtc_other_camera"])
+
+        XCTAssertEqual(monitor.liveStreamRoutingStatus, .unavailable)
+    }
+
+    func testLiveRoutingAuthenticatesAndUsesTheFrigateConfiguredStream() async {
+        let recorder = RequestRecorder()
+        FrameRequestURLProtocol.handler = { request in
+            recorder.requests.append(request)
+
+            switch request.url?.path {
+            case "/api/login":
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Set-Cookie": "frigate_token=fresh-session; Path=/; HttpOnly"]
+                    )!,
+                    Data()
+                )
+            case "/api/config":
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    Data("""
+                    {"cameras":{"birdseye":{"live":{"streams":{"main":"go2rtc_birdseye"}}}}}
+                    """.utf8)
+                )
+            default:
+                XCTFail("Unexpected request: \(request.url?.path ?? "missing URL")")
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            }
+        }
+        defer { FrameRequestURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FrameRequestURLProtocol.self]
+        let monitor = FrigateMonitor(
+            urlSession: URLSession(configuration: configuration),
+            passwordProvider: { _ in "test-password" }
+        )
+        monitor.serverAddress = "https://frigate.example:8971"
+        monitor.username = "test-user"
+
+        await monitor.ensureLiveStreamNamesLoaded()
+
+        XCTAssertEqual(monitor.currentFeedStreamName, "go2rtc_birdseye")
+        XCTAssertEqual(monitor.liveStreamRoutingStatus, .ready)
+        XCTAssertEqual(recorder.requests.map { $0.url?.path }, ["/api/login", "/api/config"])
     }
 }
 
@@ -167,6 +230,89 @@ final class FrigateLoginContractTests: XCTestCase {
         XCTAssertEqual(cookies.first?.name, "frigate_token")
         XCTAssertEqual(cookies.first?.value, "token-value")
     }
+}
+
+@MainActor
+final class JpegFeedAuthenticationTests: XCTestCase {
+    func testJpegFetchRefreshesAnExpiredSessionBeforeLoadingTheFrame() async throws {
+        let recorder = RequestRecorder()
+        FrameRequestURLProtocol.handler = { request in
+            recorder.requests.append(request)
+
+            switch request.url?.path {
+            case "/api/login":
+                XCTAssertEqual(request.httpMethod, "POST")
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Set-Cookie": "frigate_token=fresh-session; Path=/; HttpOnly"]
+                    )!,
+                    Data()
+                )
+            case "/api/birdseye/latest.jpg":
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "image/jpeg"]
+                    )!,
+                    Data([0xFF, 0xD8, 0xFF, 0xD9])
+                )
+            default:
+                XCTFail("Unexpected request: \(request.url?.path ?? "missing URL")")
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            }
+        }
+        defer { FrameRequestURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieAcceptPolicy = .always
+        configuration.httpShouldSetCookies = true
+        configuration.protocolClasses = [FrameRequestURLProtocol.self]
+        let monitor = FrigateMonitor(
+            urlSession: URLSession(configuration: configuration),
+            passwordProvider: { _ in "test-password" }
+        )
+        monitor.serverAddress = "https://frigate.example:8971"
+        monitor.username = "test-user"
+
+        let imageData = try await monitor.fetchLatestFrame()
+
+        XCTAssertEqual(imageData, Data([0xFF, 0xD8, 0xFF, 0xD9]))
+        XCTAssertEqual(recorder.requests.map { $0.url?.path }, ["/api/login", "/api/birdseye/latest.jpg"])
+    }
+}
+
+private final class RequestRecorder: @unchecked Sendable {
+    var requests: [URLRequest] = []
+}
+
+private final class FrameRequestURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        let (response, data) = handler(request)
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 final class MqttProtocolContractTests: XCTestCase {
@@ -285,12 +431,19 @@ final class FeedPlaybackStateTests: XCTestCase {
         XCTAssertEqual(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts, 3)
     }
 
+    func testLiveMSEStartupWaitAllowsTheNextCameraKeyframe() {
+        XCTAssertEqual(LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: 1), 15)
+        XCTAssertEqual(LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: 5), 15)
+        XCTAssertEqual(LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: 15), 15)
+    }
+
     func testStreamStartsAsJPEGBeforeMSEBecomesPlayable() {
         let state = FeedPlaybackState.make(
             feedMode: .stream,
             isOverlayVisible: true,
             isUsingJPEGFallback: false,
-            isLiveStreamReady: false
+            isLiveStreamReady: false,
+            isLiveStreamRoutingReady: true
         )
 
         XCTAssertEqual(state, .jpegPreview)
@@ -302,7 +455,8 @@ final class FeedPlaybackStateTests: XCTestCase {
             feedMode: .stream,
             isOverlayVisible: true,
             isUsingJPEGFallback: false,
-            isLiveStreamReady: true
+            isLiveStreamReady: true,
+            isLiveStreamRoutingReady: true
         )
 
         XCTAssertEqual(state, .liveVideo)
@@ -314,19 +468,34 @@ final class FeedPlaybackStateTests: XCTestCase {
             feedMode: .stream,
             isOverlayVisible: true,
             isUsingJPEGFallback: true,
-            isLiveStreamReady: false
+            isLiveStreamReady: false,
+            isLiveStreamRoutingReady: true
         )
         let hidden = FeedPlaybackState.make(
             feedMode: .stream,
             isOverlayVisible: false,
             isUsingJPEGFallback: false,
-            isLiveStreamReady: false
+            isLiveStreamReady: false,
+            isLiveStreamRoutingReady: true
         )
 
         XCTAssertEqual(fallback, .jpegSnapshots)
         XCTAssertFalse(fallback.mountsMSEPlayer)
         XCTAssertEqual(hidden, .jpegSnapshots)
         XCTAssertFalse(hidden.mountsMSEPlayer)
+    }
+
+    func testUnresolvedGo2RTCStreamKeepsTheFeedOnJPEG() {
+        let state = FeedPlaybackState.make(
+            feedMode: .stream,
+            isOverlayVisible: true,
+            isUsingJPEGFallback: false,
+            isLiveStreamReady: false,
+            isLiveStreamRoutingReady: false
+        )
+
+        XCTAssertEqual(state, .jpegSnapshots)
+        XCTAssertFalse(state.mountsMSEPlayer)
     }
 }
 

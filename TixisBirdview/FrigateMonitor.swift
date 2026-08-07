@@ -61,6 +61,12 @@ final class FrigateMonitor {
         }
     }
 
+    enum LiveStreamRoutingStatus: Equatable {
+        case resolving
+        case ready
+        case unavailable
+    }
+
     enum EventDeliveryMode: String, CaseIterable, Identifiable {
         case httpPolling
         case mqtt
@@ -466,6 +472,7 @@ final class FrigateMonitor {
     var overlayPresentationID = UUID()
     var streamSessionID = UUID()
     var liveStreamNames: [String: String] = [:]
+    var liveStreamRoutingError: String?
     var availableClassificationNames: [String] = []
     var isLoadingClassifications = false
     var classificationLoadError: String?
@@ -500,10 +507,11 @@ final class FrigateMonitor {
     @ObservationIgnored private var overlayDismissalTask: Task<Void, Never>?
     @ObservationIgnored private var seenEventIDs = Set<String>()
     @ObservationIgnored private var seenReviewItemIDs = Set<String>()
-    @ObservationIgnored private var urlSession = FrigateMonitor.makeURLSession()
+    @ObservationIgnored private var urlSession: URLSession
+    @ObservationIgnored private let passwordProvider: (String) throws -> String?
     @ObservationIgnored private var hasAuthenticatedSession = false
     @ObservationIgnored private var isLoadingLiveStreamNames = false
-    @ObservationIgnored private var hasLoadedLiveStreamNames = false
+    private var hasLoadedLiveStreamNames = false
     @ObservationIgnored private var alertSoundPlayer: NSSound?
     @ObservationIgnored private var lastAlertSoundDate: Date?
     @ObservationIgnored private var lastAutomaticPopupDate: Date?
@@ -539,7 +547,12 @@ final class FrigateMonitor {
     private static let keychainService = "org.tixisbirdview.app.frigate"
     private static let mqttKeychainService = "org.tixisbirdview.app.mqtt"
 
-    init() {
+    init(
+        urlSession: URLSession? = nil,
+        passwordProvider: ((String) throws -> String?)? = nil
+    ) {
+        self.urlSession = urlSession ?? Self.makeURLSession()
+        self.passwordProvider = passwordProvider ?? Self.savedPassword
         let savedOverlayDuration = UserDefaults.standard.double(forKey: Self.overlayDurationKey)
         overlayDurationSeconds = savedOverlayDuration > 0 ? savedOverlayDuration : Self.defaultOverlayDurationSeconds
         feedMode = FeedMode(rawValue: UserDefaults.standard.string(forKey: Self.feedModeKey) ?? "") ?? .jpeg
@@ -607,6 +620,16 @@ final class FrigateMonitor {
 
     var currentFeedStreamName: String {
         liveStreamNames[currentFeedCameraName] ?? currentFeedCameraName
+    }
+
+    var liveStreamRoutingStatus: LiveStreamRoutingStatus {
+        if liveStreamRoutingError != nil {
+            return .unavailable
+        }
+        guard hasLoadedLiveStreamNames else {
+            return .resolving
+        }
+        return liveStreamNames[currentFeedCameraName] == nil ? .unavailable : .ready
     }
 
     var feedURL: URL {
@@ -914,7 +937,7 @@ final class FrigateMonitor {
             return
         }
 
-        refreshLiveStreamNamesIfNeeded()
+        await ensureLiveStreamNamesLoaded()
 
         async let reviewItemsResult = fetchRecentReviewItems()
         async let eventsResult = fetchRecentEvents()
@@ -989,6 +1012,10 @@ final class FrigateMonitor {
     }
 
     func fetchLatestFrame() async throws -> Data {
+        // MQTT can continue to deliver events after Frigate expires an HTTP
+        // session. Refresh it here so the JPEG fallback remains usable.
+        try await authenticateIfNeeded()
+
         var components = URLComponents(url: feedURL, resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "t", value: "\(Date().timeIntervalSince1970)")
@@ -1172,24 +1199,21 @@ final class FrigateMonitor {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
-    private func refreshLiveStreamNamesIfNeeded() {
+    func ensureLiveStreamNamesLoaded() async {
         guard !isLoadingLiveStreamNames, !hasLoadedLiveStreamNames else {
             return
         }
 
         isLoadingLiveStreamNames = true
-        Task { [weak self] in
-            guard let self else {
-                return
-            }
+        liveStreamRoutingError = nil
+        defer { isLoadingLiveStreamNames = false }
 
-            defer { isLoadingLiveStreamNames = false }
-
-            do {
-                applyLiveStreamNames(try await fetchLiveStreamNames())
-            } catch {
-                // JPEG remains available if this optional live-stream lookup fails.
-            }
+        do {
+            try await authenticateIfNeeded()
+            applyLiveStreamNames(try await fetchLiveStreamNames())
+        } catch {
+            // Never guess that an event camera key is also a go2rtc source.
+            liveStreamRoutingError = "Live stream routing could not be loaded."
         }
     }
 
@@ -1198,6 +1222,7 @@ final class FrigateMonitor {
         let previousStreamName = currentFeedStreamName
         liveStreamNames = streamNames
         hasLoadedLiveStreamNames = true
+        liveStreamRoutingError = nil
 
         // A popup may have started with its camera key before this lookup
         // completed. Recreate the MSE player with the resolved go2rtc name.
@@ -1245,7 +1270,7 @@ final class FrigateMonitor {
             return
         }
 
-        guard let password = try Self.savedPassword(for: username) else {
+        guard let password = try passwordProvider(username) else {
             throw AuthenticationError.missingPassword
         }
         guard let baseURL else {
@@ -1366,6 +1391,7 @@ final class FrigateMonitor {
         hasAuthenticatedSession = false
         hasLoadedLiveStreamNames = false
         liveStreamNames = [:]
+        liveStreamRoutingError = nil
         availableClassificationNames = []
         classificationLoadError = nil
         streamSessionID = UUID()

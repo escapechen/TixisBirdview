@@ -19,6 +19,16 @@ enum LiveStreamLatencyPolicy {
     static let maximumConsecutiveRecoveryAttempts = 3
 }
 
+enum LiveStreamStartupPolicy {
+    /// A camera may need to wait for its next H.264 keyframe after MSE has
+    /// negotiated successfully. JPEG remains visible during this interval.
+    static let minimumPlayableFrameWaitSeconds = 15
+
+    static func playableFrameWaitSeconds(configuredSeconds: Int) -> Int {
+        max(minimumPlayableFrameWaitSeconds, min(15, max(1, configuredSeconds)))
+    }
+}
+
 struct FrigateMSEStreamView: NSViewRepresentable {
     let serverURL: URL?
     let cameraName: String
@@ -121,6 +131,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             const hardCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds);
             const maximumCatchUpPlaybackRate = \(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate);
             const maxRecoveryAttempts = \(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts);
+            const playableFrameTimeoutMs = \(LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: startupTimeoutSeconds) * 1000);
             const maxPendingBytes = 2 * 1024 * 1024;
             const reconnectDelay = 1500;
             var socket;
@@ -135,6 +146,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             var shouldReconnect = true;
             var isRecovering = false;
             var recoveryAttempts = 0;
+            var hasDecodedFirstFrame = false;
             var lastPlaybackTime = -1;
             var lastPlaybackAdvanceAt = Date.now();
 
@@ -178,6 +190,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             video.addEventListener("loadeddata", () => {
               clearTimeout(firstFrameTimer);
               firstFrameTimer = undefined;
+              hasDecodedFirstFrame = true;
               status("playing");
               debug("decoded first video frame");
               connected();
@@ -225,7 +238,15 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               video.removeAttribute("src");
               video.srcObject = null;
               video.playbackRate = 1;
+              hasDecodedFirstFrame = false;
               video.load();
+            }
+
+            function waitForPlayableFrame() {
+              clearTimeout(firstFrameTimer);
+              firstFrameTimer = setTimeout(() => {
+                recover("Frigate sent live video, but this Mac could not decode a playable frame.");
+              }, playableFrameTimeoutMs);
             }
 
             function recover(reason) {
@@ -302,7 +323,9 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             }
 
             function keepNearLiveEdge() {
-              if (!sourceBuffer?.buffered.length || !Number.isFinite(video.currentTime)) return;
+              // Seeking before the first decoded frame can land on an inter-frame
+              // without its preceding keyframe, leaving WebKit permanently blank.
+              if (!hasDecodedFirstFrame || !sourceBuffer?.buffered.length || !Number.isFinite(video.currentTime)) return;
               const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
               const start = Math.max(0, end - maxBufferSeconds);
               const gap = end - video.currentTime;
@@ -384,7 +407,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 video.play().catch((error) => recover(`Live stream could not start: ${error.message || error}`));
                 clearTimeout(firstFrameTimer);
                 firstFrameTimer = setTimeout(() => {
-                  recover("Frigate connected but did not send playable video.");
+                  recover("Frigate connected but did not negotiate a live video format.");
                 }, startupTimeoutMs);
               };
 
@@ -408,6 +431,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                       keepNearLiveEdge();
                       pump();
                     });
+                    waitForPlayableFrame();
 
                     currentSocket.onmessage = (binaryEvent) => {
                       if (socket !== currentSocket || isRecovering) return;
