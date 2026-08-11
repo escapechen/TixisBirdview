@@ -4,7 +4,27 @@ All notable user-facing changes are recorded here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning when releases are tagged.
 
-## [1.0.0] — Unreleased
+## [1.1.0] — Unreleased
+
+### Fixed
+
+- Live video keeps a user-visible activity assertion while its non-activating
+  overlay is open, preventing macOS from deferring WebKit playback when the
+  menu-bar app is inactive. Normal idle system sleep remains allowed.
+- The popup now selects the camera with the newest relevant event or review
+  activity instead of always preferring an older event.
+- Alert titles now suppress repeated verified sub-labels from Frigate.
+- The muted live MSE player now requests video only, avoiding camera-audio clock
+  problems, and no longer seeks or accelerates WebKit playback. A player that
+  falls excessively behind is rebuilt cleanly while JPEG remains available.
+- The macOS player now resumes WebKit after transient pause/end states whenever
+  fresh MSE data arrives, matching Frigate's ManagedMediaSource lifecycle.
+- Live MSE duration remains open-ended, preventing an ended-state replay from
+  resetting the feed several seconds into the past when a new fragment arrives.
+- Closing or hiding a feed now explicitly closes even a still-negotiating MSE
+  WebSocket, preventing abandoned players from exhausting future live upgrades.
+
+## [1.0.0]
 
 ### Added
 
@@ -49,3 +69,4 @@ versioning when releases are tagged.
   password preferences.
 
 [1.0.0]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.0.0
+[1.1.0]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.1.0

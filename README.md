@@ -103,7 +103,9 @@ addresses and no real credentials.
    time for doorbell-like feeds or increase it for a camera with a slow
    key-frame interval. Enable **Write live-player diagnostics to terminal
    output** when troubleshooting; its concise state lines intentionally omit
-   server addresses, camera names, credentials, cookies, and tokens.
+   server addresses, camera names, credentials, cookies, and tokens. The muted
+   WebKit player requests video only and does not seek or accelerate the live
+   playhead; an excessively delayed player is rebuilt cleanly.
 4. Still on **Feed & Sound**, optionally enable **Sound alert**, select a
    sound, set its volume, and use **Preview** to test it. **Sound cooldown**
    appears once sound is enabled and suppresses repeated automatic sounds.

@@ -8,15 +8,16 @@ import SwiftUI
 import WebKit
 
 enum LiveStreamLatencyPolicy {
-    /// Keep enough complete media for WebKit to decode a camera GOP; control
-    /// latency with the playhead, not aggressive SourceBuffer eviction.
+    /// Keep enough complete media for WebKit to decode a camera GOP. Do not
+    /// seek or alter playback speed: both can make WKWebView stop decoding.
     static let maximumBufferedSeconds = 6.0
     static let retainedBufferedSeconds = 5.0
-    static let targetLatencySeconds = 1.0
-    static let softCatchUpThresholdSeconds = 1.5
-    static let hardCatchUpThresholdSeconds = 2.5
-    static let maximumCatchUpPlaybackRate = 1.25
+    static let maximumBufferedGapBeforeRecoverySeconds = 8.0
     static let maximumConsecutiveRecoveryAttempts = 3
+
+    static func shouldRecoverFromExcessiveLag(bufferedGap: Double) -> Bool {
+        bufferedGap > maximumBufferedGapBeforeRecoverySeconds
+    }
 }
 
 enum LiveStreamStartupPolicy {
@@ -30,6 +31,8 @@ enum LiveStreamStartupPolicy {
 }
 
 struct FrigateMSEStreamView: NSViewRepresentable {
+    static let teardownJavaScript = "window.tixisBirdviewStop?.();"
+
     let serverURL: URL?
     let cameraName: String
     let cookies: [HTTPCookie]
@@ -89,11 +92,14 @@ struct FrigateMSEStreamView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.stopLoading()
+        webView.evaluateJavaScript(Self.teardownJavaScript) { _, _ in
+            webView.stopLoading()
+            webView.loadHTMLString("", baseURL: nil)
+        }
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "frigateMSE")
     }
 
-    private static func html(
+    static func html(
         serverURL: URL,
         cameraName: String,
         startupTimeoutSeconds: Int,
@@ -116,20 +122,20 @@ struct FrigateMSEStreamView: NSViewRepresentable {
           </style>
         </head>
         <body>
-          <video id="feed" autoplay muted playsinline></video>
+          <video id="feed" autoplay muted playsinline preload="auto"></video>
           <script>
             const server = \(encodedServerURL);
             const camera = \(encodedCameraName);
             const video = document.getElementById("feed");
             const startupTimeoutMs = \(min(15, max(1, startupTimeoutSeconds)) * 1000);
             const debugEnabled = \(debugEnabled ? "true" : "false");
-            const codecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
+            // The alert player is intentionally muted. Requesting audio makes
+            // WebKit synchronize video to camera audio timestamps and can turn
+            // otherwise healthy live video into very slow playback.
+            const videoCodecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0"];
             const maxBufferSeconds = \(LiveStreamLatencyPolicy.maximumBufferedSeconds);
             const keepBufferSeconds = \(LiveStreamLatencyPolicy.retainedBufferedSeconds);
-            const targetLatencySeconds = \(LiveStreamLatencyPolicy.targetLatencySeconds);
-            const softCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.softCatchUpThresholdSeconds);
-            const hardCatchUpThresholdSeconds = \(LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds);
-            const maximumCatchUpPlaybackRate = \(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate);
+            const maximumBufferedGapBeforeRecoverySeconds = \(LiveStreamLatencyPolicy.maximumBufferedGapBeforeRecoverySeconds);
             const maxRecoveryAttempts = \(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts);
             const playableFrameTimeoutMs = \(LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: startupTimeoutSeconds) * 1000);
             const maxPendingBytes = 2 * 1024 * 1024;
@@ -147,8 +153,15 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             var isRecovering = false;
             var recoveryAttempts = 0;
             var hasDecodedFirstFrame = false;
+            var hasReportedPlaying = false;
+            var playbackResumeInFlight = false;
             var lastPlaybackTime = -1;
             var lastPlaybackAdvanceAt = Date.now();
+            var receivedSegments = 0;
+            var appendedSegments = 0;
+            var lastStats = {
+              time: performance.now(), mediaTime: 0, received: 0, appended: 0, decoded: 0, dropped: 0
+            };
 
             function report(message) {
               window.webkit?.messageHandlers?.frigateMSE?.postMessage({ type: "error", message });
@@ -164,6 +177,39 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             function debug(message) {
               if (debugEnabled) window.webkit?.messageHandlers?.frigateMSE?.postMessage({ type: "debug", message });
+            }
+
+            function debugPlaybackStats() {
+              if (!debugEnabled) return;
+              const now = performance.now();
+              const elapsedSeconds = (now - lastStats.time) / 1000;
+              if (elapsedSeconds < 2) return;
+              const quality = video.getVideoPlaybackQuality?.();
+              const decoded = quality?.totalVideoFrames ?? video.webkitDecodedFrameCount ?? 0;
+              const dropped = quality?.droppedVideoFrames ?? video.webkitDroppedFrameCount ?? 0;
+              const end = sourceBuffer?.buffered.length
+                ? sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1)
+                : NaN;
+              const gap = Number.isFinite(end) && Number.isFinite(video.currentTime)
+                ? end - video.currentTime
+                : NaN;
+              const receivedRate = (receivedSegments - lastStats.received) / elapsedSeconds;
+              const appendedRate = (appendedSegments - lastStats.appended) / elapsedSeconds;
+              const decodedRate = (decoded - lastStats.decoded) / elapsedSeconds;
+              const droppedRate = (dropped - lastStats.dropped) / elapsedSeconds;
+              const mediaAdvance = video.currentTime - lastStats.mediaTime;
+              debug(
+                `stats source=${receivedRate.toFixed(1)}/s append=${appendedRate.toFixed(1)}/s ` +
+                `decode=${decodedRate.toFixed(1)}/s drop=${droppedRate.toFixed(1)}/s ` +
+                `gap=${Number.isFinite(gap) ? gap.toFixed(2) : "?"}s ` +
+                `advance=${mediaAdvance.toFixed(2)}s pending=${pending.length}/${Math.round(pendingBytes / 1024)}KiB ` +
+                `paused=${video.paused ? 1 : 0} ended=${video.ended ? 1 : 0} ready=${video.readyState} ` +
+                `media=${mediaSource?.readyState || "none"}`
+              );
+              lastStats = {
+                time: now, mediaTime: video.currentTime, received: receivedSegments,
+                appended: appendedSegments, decoded, dropped
+              };
             }
 
             function fallback(message) {
@@ -187,16 +233,52 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               }
             }
 
+            function ensurePlayback(reason) {
+              if (playbackResumeInFlight || socket?.readyState !== WebSocket.OPEN) return;
+              const gap = bufferedGap();
+              if (video.ended && (!Number.isFinite(gap) || gap <= 0.05)) {
+                debug(`playback recovery after ${reason} deferred until fresh media arrives`);
+                return;
+              }
+              const resumeTime = video.currentTime;
+              playbackResumeInFlight = true;
+              video.play()
+                .then(() => {
+                  if (video.currentTime + 0.5 < resumeTime) {
+                    recover("Live stream timeline reset while resuming playback.");
+                    return;
+                  }
+                  debug(`video resumed after ${reason}; ended=${video.ended ? 1 : 0}`);
+                })
+                .catch((error) => debug(`playback recovery after ${reason} failed: ${error.name || error}`))
+                .finally(() => { playbackResumeInFlight = false; });
+            }
+
             video.addEventListener("loadeddata", () => {
               clearTimeout(firstFrameTimer);
               firstFrameTimer = undefined;
               hasDecodedFirstFrame = true;
-              status("playing");
               debug("decoded first video frame");
-              connected();
               reportAspectRatio();
-              lastPlaybackTime = video.currentTime;
-              lastPlaybackAdvanceAt = Date.now();
+              if (lastPlaybackTime < 0) {
+                lastPlaybackTime = video.currentTime;
+                lastPlaybackAdvanceAt = Date.now();
+              }
+              if (video.paused) ensurePlayback("loaded data");
+            });
+
+            video.addEventListener("playing", () => {
+              hasDecodedFirstFrame = true;
+              status("playing");
+              debug("video playback running");
+              if (!hasReportedPlaying) {
+                hasReportedPlaying = true;
+                connected();
+              }
+              if (lastPlaybackTime < 0) {
+                lastPlaybackTime = video.currentTime;
+                lastPlaybackAdvanceAt = Date.now();
+              }
               clearTimeout(stablePlaybackTimer);
               stablePlaybackTimer = setTimeout(() => {
                 if (Date.now() - lastPlaybackAdvanceAt < 5000) recoveryAttempts = 0;
@@ -204,11 +286,18 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             });
 
             video.addEventListener("loadedmetadata", reportAspectRatio);
+            video.addEventListener("waiting", () => debug("video waiting for decodable media"));
+            video.addEventListener("stalled", () => debug("video element reported a network stall"));
 
             video.addEventListener("pause", () => {
-              if (socket?.readyState === WebSocket.OPEN && !video.ended) {
-                video.play().catch(() => {});
-              }
+              debug(
+                `video paused ended=${video.ended ? 1 : 0} ready=${video.readyState} ` +
+                `current=${video.currentTime.toFixed(2)} duration=${Number.isFinite(video.duration) ? video.duration.toFixed(2) : video.duration}`
+              );
+              ensurePlayback("pause");
+            });
+            video.addEventListener("ended", () => {
+              debug("video reached its temporary buffered end; waiting for fresh media");
             });
 
             window.addEventListener("error", (event) => {
@@ -221,24 +310,50 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             function closeSocket() {
               if (!socket) return;
-              socket.onopen = null;
-              socket.onmessage = null;
-              socket.onerror = null;
-              socket.onclose = null;
-              socket.close();
+              const currentSocket = socket;
               socket = null;
+              currentSocket.onopen = null;
+              currentSocket.onmessage = null;
+              currentSocket.onerror = null;
+              currentSocket.onclose = null;
+              try {
+                currentSocket.close();
+              } catch (_) {
+                // Closing a WebSocket that is still negotiating must not abort cleanup.
+              }
             }
+
+            function stop() {
+              shouldReconnect = false;
+              clearTimeout(firstFrameTimer);
+              clearTimeout(socketOpenTimer);
+              clearTimeout(restartTimer);
+              clearTimeout(stablePlaybackTimer);
+              closeSocket();
+              resetMediaSource();
+            }
+
+            window.tixisBirdviewStop = stop;
 
             function resetMediaSource() {
               sourceBuffer = null;
               mediaSource = null;
               pending = [];
               pendingBytes = 0;
+              receivedSegments = 0;
+              appendedSegments = 0;
+              lastPlaybackTime = -1;
+              lastPlaybackAdvanceAt = Date.now();
+              lastStats = {
+                time: performance.now(), mediaTime: 0, received: 0, appended: 0, decoded: 0, dropped: 0
+              };
               if (video.src) URL.revokeObjectURL(video.src);
               video.removeAttribute("src");
               video.srcObject = null;
               video.playbackRate = 1;
               hasDecodedFirstFrame = false;
+              hasReportedPlaying = false;
+              playbackResumeInFlight = false;
               video.load();
             }
 
@@ -276,7 +391,6 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             function trimBuffer() {
               if (!sourceBuffer || sourceBuffer.updating || !sourceBuffer.buffered.length) return false;
-              keepNearLiveEdge();
               const ranges = sourceBuffer.buffered;
               const start = ranges.start(0);
               const end = ranges.end(ranges.length - 1);
@@ -306,6 +420,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 const segment = pending.shift();
                 pendingBytes -= segment.byteLength;
                 sourceBuffer.appendBuffer(segment);
+                appendedSegments += 1;
               } catch (error) {
                 recoverBufferError(error);
               }
@@ -313,6 +428,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
 
             function appendSegment(segment) {
               if (!sourceBuffer || isRecovering) return;
+              receivedSegments += 1;
               pending.push(segment);
               pendingBytes += segment.byteLength;
               if (pendingBytes > maxPendingBytes) {
@@ -322,28 +438,17 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               pump();
             }
 
-            function keepNearLiveEdge() {
-              // Seeking before the first decoded frame can land on an inter-frame
-              // without its preceding keyframe, leaving WebKit permanently blank.
-              if (!hasDecodedFirstFrame || !sourceBuffer?.buffered.length || !Number.isFinite(video.currentTime)) return;
-              const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-              const start = Math.max(0, end - maxBufferSeconds);
-              const gap = end - video.currentTime;
+            function bufferedGap() {
+              if (!sourceBuffer?.buffered.length || !Number.isFinite(video.currentTime)) return NaN;
+              return sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1) - video.currentTime;
+            }
+
+            function keepMediaSourceOpenEnded() {
+              if (!mediaSource || mediaSource.readyState !== "open" || sourceBuffer?.updating) return;
               try {
-                mediaSource?.setLiveSeekableRange?.(start, end);
-              } catch (_) {
-                // ManagedMediaSource availability differs across supported macOS releases.
-              }
-              if (gap > hardCatchUpThresholdSeconds) {
-                video.currentTime = Math.max(0, end - targetLatencySeconds);
-                video.playbackRate = 1;
-              } else if (gap > softCatchUpThresholdSeconds) {
-                video.playbackRate = Math.min(
-                  maximumCatchUpPlaybackRate,
-                  1 + (gap - targetLatencySeconds) * 0.2
-                );
-              } else if (video.playbackRate !== 1) {
-                video.playbackRate = 1;
+                if (mediaSource.duration !== Infinity) mediaSource.duration = Infinity;
+              } catch (error) {
+                debug(`could not keep live duration open-ended: ${error.name || error}`);
               }
             }
 
@@ -351,12 +456,18 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               if (!shouldReconnect) return;
               status("connecting");
               debug("opening MSE connection");
-              const MediaSourceConstructor = window.ManagedMediaSource || window.MediaSource;
+              // Match Frigate's Safari player: ManagedMediaSource is the native
+              // WebKit path, with ordinary MediaSource as its compatibility fallback.
+              const usingManagedMediaSource = !!window.ManagedMediaSource;
+              const MediaSourceConstructor = usingManagedMediaSource
+                ? window.ManagedMediaSource
+                : window.MediaSource;
               if (!MediaSourceConstructor) {
                 fallback("This Mac cannot play Frigate's MSE stream. Showing JPEG snapshots.");
                 return;
               }
-              const supported = codecs.filter((codec) =>
+              debug(`using ${usingManagedMediaSource ? "ManagedMediaSource" : "MediaSource"}`);
+              const supported = videoCodecs.filter((codec) =>
                 MediaSourceConstructor.isTypeSupported(`video/mp4; codecs="${codec}"`)
               ).join();
               if (!supported) {
@@ -396,7 +507,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                     recover(`Live stream setup failed: ${error.message || error}`);
                   }
                 }, { once: true });
-                if ("ManagedMediaSource" in window) {
+                if (usingManagedMediaSource) {
                   video.disableRemotePlayback = true;
                   video.srcObject = mediaSource;
                 } else {
@@ -428,8 +539,10 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                     sourceBuffer = mediaSource.addSourceBuffer(response.value);
                     if (sourceBuffer.mode) sourceBuffer.mode = "segments";
                     sourceBuffer.addEventListener("updateend", () => {
-                      keepNearLiveEdge();
+                      keepMediaSourceOpenEnded();
+                      if (video.paused) ensurePlayback("buffer update");
                       pump();
+                      debugPlaybackStats();
                     });
                     waitForPlayableFrame();
 
@@ -450,29 +563,33 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             }
 
             video.addEventListener("timeupdate", () => {
+              if (lastPlaybackTime >= 0 && video.currentTime + 0.5 < lastPlaybackTime) {
+                recover("Live stream timeline moved backwards.");
+                return;
+              }
               if (video.currentTime > lastPlaybackTime + 0.05) {
                 lastPlaybackTime = video.currentTime;
                 lastPlaybackAdvanceAt = Date.now();
               }
-              keepNearLiveEdge();
+              debugPlaybackStats();
             });
 
             setInterval(() => {
               if (!shouldReconnect || !socket || socket.readyState !== WebSocket.OPEN || isRecovering) return;
+              debugPlaybackStats();
+              const gap = bufferedGap();
+              if (hasDecodedFirstFrame && Number.isFinite(gap)
+                  && gap > maximumBufferedGapBeforeRecoverySeconds) {
+                recover("Live stream playback fell too far behind.");
+                return;
+              }
               if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
                   && Date.now() - lastPlaybackAdvanceAt > 5000) {
                 recover("Live stream stalled.");
               }
             }, 2000);
 
-            window.addEventListener("pagehide", () => {
-              shouldReconnect = false;
-              clearTimeout(firstFrameTimer);
-              clearTimeout(socketOpenTimer);
-              clearTimeout(restartTimer);
-              clearTimeout(stablePlaybackTimer);
-              closeSocket();
-            });
+            window.addEventListener("pagehide", stop);
             status("starting player");
             start();
           </script>

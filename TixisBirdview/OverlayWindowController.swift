@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Foundation
 import Observation
 import SwiftUI
 
@@ -43,6 +44,7 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
     @ObservationIgnored private let widthAutosaveName = "TixisBirdviewFeedOverlayWidth"
     @ObservationIgnored private var contentAspectRatio: CGFloat = 16 / 9
     @ObservationIgnored private let framePersistenceGate = OverlayFramePersistenceGate()
+    @ObservationIgnored private var livePlaybackActivity: NSObjectProtocol?
 
     private let defaultWidth: CGFloat = 360
     private let screenMargin: CGFloat = 18
@@ -63,6 +65,8 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
         guard let panel else {
             return
         }
+
+        beginLivePlaybackActivity()
 
         guard !panel.isVisible else {
             panel.orderFrontRegardless()
@@ -94,6 +98,30 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
 
     func hide() {
         panel?.orderOut(nil)
+        endLivePlaybackActivity()
+    }
+
+    private func beginLivePlaybackActivity() {
+        guard livePlaybackActivity == nil else {
+            return
+        }
+
+        // This is a non-activating, status-bar-level panel. Keep the process
+        // eligible to render its user-visible live video while it is inactive,
+        // but do not prevent normal idle system sleep.
+        livePlaybackActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Displaying a live Frigate alert"
+        )
+    }
+
+    private func endLivePlaybackActivity() {
+        guard let livePlaybackActivity else {
+            return
+        }
+
+        ProcessInfo.processInfo.endActivity(livePlaybackActivity)
+        self.livePlaybackActivity = nil
     }
 
     private func makePanel() {

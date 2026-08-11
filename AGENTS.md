@@ -29,6 +29,14 @@ Live stream routing must use the Frigate config mapping
 `cameras.<camera>.live.streams`; an event camera name is not necessarily the
 go2rtc stream name. JPEG snapshots are the compatible fallback.
 
+- TixisBirdview must work with a Frigate installation as configured. Access
+  live media only through Frigate's existing authenticated HTTPS/WSS proxy;
+  never require users to expose extra go2rtc ports or unencrypted/unauthenticated
+  streams.
+- The sibling repository `/Users/marcel/Documents/repos/frigateHOMELAN` is the
+  server-side source used by Marcel's custom Frigate installation. Inspect and,
+  when explicitly requested, coordinate compatible changes across both repos.
+
 ## Security and privacy
 
 - Passwords belong only in the macOS Keychain. Never log, commit, or display

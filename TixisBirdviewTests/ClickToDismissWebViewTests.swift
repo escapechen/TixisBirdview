@@ -115,6 +115,59 @@ final class OverlayFramePersistenceGateTests: XCTestCase {
 }
 
 @MainActor
+final class FeedCameraSelectionTests: XCTestCase {
+    func testReviewObjectNamesDeduplicateRepeatedVerifiedSubLabels() throws {
+        let review = try JSONDecoder().decode(
+            FrigateReviewItem.self,
+            from: Data("""
+            {
+              "id": "garden-cat",
+              "camera": "GARTEN_CAM",
+              "start_time": 130,
+              "end_time": 140,
+              "severity": "alert",
+              "data": {
+                "objects": ["cat-verified"],
+                "sub_labels": ["Tixi", "Tixi"]
+              }
+            }
+            """.utf8)
+        )
+
+        XCTAssertEqual(review.data.objectNames, ["cat-verified", "Tixi"])
+        XCTAssertEqual(review.data.bestObjectDescription, "Cat-Verified, Tixi")
+    }
+
+    func testCurrentFeedCameraPrefersNewerReviewActivity() throws {
+        let monitor = FrigateMonitor()
+        monitor.latestEvent = FrigateEvent(
+            id: "older-event",
+            camera: "FLUR_CAM",
+            label: "cat",
+            subLabel: nil,
+            startTime: 100,
+            endTime: 120,
+            topScore: nil
+        )
+        monitor.latestReviewItem = try JSONDecoder().decode(
+            FrigateReviewItem.self,
+            from: Data("""
+            {
+              "id": "newer-review",
+              "camera": "WZ_CAM",
+              "start_time": 130,
+              "end_time": 140,
+              "severity": "alert",
+              "data": { "objects": ["cat"], "sub_labels": [] }
+            }
+            """.utf8)
+        )
+
+        XCTAssertEqual(monitor.currentFeedCameraName, "WZ_CAM")
+    }
+}
+
+@MainActor
 final class LiveStreamRoutingTests: XCTestCase {
     func testResolvedStreamNameRestartsTheLivePlayer() {
         let monitor = FrigateMonitor()
@@ -422,13 +475,53 @@ final class FeedPlaybackStateTests: XCTestCase {
     func testLiveMSELatencyPolicyPrioritizesFreshFrames() {
         XCTAssertGreaterThanOrEqual(LiveStreamLatencyPolicy.retainedBufferedSeconds, 5)
         XCTAssertLessThan(LiveStreamLatencyPolicy.retainedBufferedSeconds, LiveStreamLatencyPolicy.maximumBufferedSeconds)
-        XCTAssertLessThanOrEqual(LiveStreamLatencyPolicy.targetLatencySeconds, 1)
-        XCTAssertLessThanOrEqual(
-            LiveStreamLatencyPolicy.hardCatchUpThresholdSeconds,
+        XCTAssertGreaterThan(
+            LiveStreamLatencyPolicy.maximumBufferedGapBeforeRecoverySeconds,
             LiveStreamLatencyPolicy.maximumBufferedSeconds
         )
-        XCTAssertGreaterThan(LiveStreamLatencyPolicy.maximumCatchUpPlaybackRate, 1)
         XCTAssertEqual(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts, 3)
+    }
+
+    func testLiveMSEOnlyRecoversAfterExcessiveLag() {
+        XCTAssertFalse(LiveStreamLatencyPolicy.shouldRecoverFromExcessiveLag(bufferedGap: 8))
+        XCTAssertTrue(LiveStreamLatencyPolicy.shouldRecoverFromExcessiveLag(bufferedGap: 8.01))
+    }
+
+    func testMSEPlayerHTMLUsesVideoOnlyWithoutPlayheadManipulation() throws {
+        let html = try XCTUnwrap(
+            URL(string: "https://192.0.2.1:8971").map {
+                FrigateMSEStreamView.html(
+                    serverURL: $0,
+                    cameraName: "GARTEN_CAM",
+                    startupTimeoutSeconds: 5,
+                    debugEnabled: false
+                )
+            }
+        )
+
+        XCTAssertFalse(html.contains("video.currentTime ="))
+        XCTAssertFalse(html.contains("setLiveSeekableRange"))
+        XCTAssertFalse(html.contains("video.playbackRate = playbackRate"))
+        XCTAssertFalse(html.contains("mp4a.40.2"))
+        XCTAssertFalse(html.contains("opus"))
+        XCTAssertTrue(html.contains("const videoCodecs"))
+        XCTAssertTrue(html.contains("const usingManagedMediaSource = !!window.ManagedMediaSource"))
+        XCTAssertTrue(html.contains("if (usingManagedMediaSource)"))
+        XCTAssertFalse(html.contains("window.ManagedMediaSource || window.MediaSource"))
+        XCTAssertTrue(html.contains("video.addEventListener(\"playing\""))
+        XCTAssertTrue(html.contains("ensurePlayback(\"pause\")"))
+        XCTAssertTrue(html.contains("ensurePlayback(\"buffer update\")"))
+        XCTAssertTrue(html.contains("gap <= 0.05"))
+        XCTAssertTrue(html.contains("mediaSource.duration = Infinity"))
+        XCTAssertFalse(html.contains("ensurePlayback(\"ended state\")"))
+        XCTAssertTrue(html.contains("Live stream timeline reset while resuming playback."))
+        XCTAssertTrue(html.contains("Live stream timeline moved backwards."))
+        XCTAssertTrue(html.contains("gap > maximumBufferedGapBeforeRecoverySeconds"))
+        XCTAssertTrue(html.contains("window.tixisBirdviewStop = stop"))
+        XCTAssertTrue(html.contains("window.addEventListener(\"pagehide\", stop)"))
+        XCTAssertTrue(html.contains("currentSocket.close()"))
+        XCTAssertEqual(FrigateMSEStreamView.teardownJavaScript, "window.tixisBirdviewStop?.();")
+        XCTAssertEqual(html.components(separatedBy: "connected();").count - 1, 1)
     }
 
     func testLiveMSEStartupWaitAllowsTheNextCameraKeyframe() {

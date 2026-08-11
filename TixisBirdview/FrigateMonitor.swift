@@ -615,7 +615,17 @@ final class FrigateMonitor {
     }
 
     var currentFeedCameraName: String {
-        latestEvent?.camera ?? latestReviewItem?.camera ?? defaultFeedCameraName
+        switch (latestEvent, latestReviewItem) {
+        case let (event?, review?):
+            let eventActivityTime = event.endTime ?? event.startTime
+            return eventActivityTime >= review.activityTime ? event.camera : review.camera
+        case let (event?, nil):
+            return event.camera
+        case let (nil, review?):
+            return review.camera
+        case (nil, nil):
+            return defaultFeedCameraName
+        }
     }
 
     var currentFeedStreamName: String {
@@ -1743,7 +1753,10 @@ struct FrigateReviewItem: Decodable, Identifiable, Hashable {
         let subLabels: [String]
 
         var objectNames: [String] {
-            objects + subLabels
+            var seenNames = Set<String>()
+            return (objects + subLabels).filter {
+                seenNames.insert($0.normalizedDetectionName).inserted
+            }
         }
 
         var bestObjectDescription: String {
