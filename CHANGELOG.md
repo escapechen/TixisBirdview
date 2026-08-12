@@ -23,6 +23,9 @@ versioning when releases are tagged.
   resetting the feed several seconds into the past when a new fragment arrives.
 - Closing or hiding a feed now explicitly closes even a still-negotiating MSE
   WebSocket, preventing abandoned players from exhausting future live upgrades.
+- If go2rtc negotiates video-only MSE but sends only its initializer, the player
+  retries once with Frigate's standard codec set and reports a source failure
+  separately from a genuine macOS decoding failure.
 
 ## [1.0.0]
 

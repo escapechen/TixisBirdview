@@ -133,6 +133,10 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             // WebKit synchronize video to camera audio timestamps and can turn
             // otherwise healthy live video into very slow playback.
             const videoCodecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0"];
+            // Frigate's own MSE player advertises these audio codecs as well.
+            // Keep video-only as the low-latency default, but use the standard
+            // set if go2rtc's video-only producer supplies only an initializer.
+            const standardCodecs = [...videoCodecs, "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
             const maxBufferSeconds = \(LiveStreamLatencyPolicy.maximumBufferedSeconds);
             const keepBufferSeconds = \(LiveStreamLatencyPolicy.retainedBufferedSeconds);
             const maximumBufferedGapBeforeRecoverySeconds = \(LiveStreamLatencyPolicy.maximumBufferedGapBeforeRecoverySeconds);
@@ -155,6 +159,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             var hasDecodedFirstFrame = false;
             var hasReportedPlaying = false;
             var playbackResumeInFlight = false;
+            var useStandardCodecNegotiation = false;
             var lastPlaybackTime = -1;
             var lastPlaybackAdvanceAt = Date.now();
             var receivedSegments = 0;
@@ -360,7 +365,16 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             function waitForPlayableFrame() {
               clearTimeout(firstFrameTimer);
               firstFrameTimer = setTimeout(() => {
-                recover("Frigate sent live video, but this Mac could not decode a playable frame.");
+                if (receivedSegments <= 1 && !useStandardCodecNegotiation) {
+                  useStandardCodecNegotiation = true;
+                  recover("Frigate's video-only source delivered no media. Retrying with standard stream negotiation.");
+                  return;
+                }
+                if (receivedSegments <= 1) {
+                  recover("Frigate negotiated live video, but the configured go2rtc source delivered no media.");
+                  return;
+                }
+                recover("Frigate delivered media fragments, but this Mac could not decode a playable frame.");
               }, playableFrameTimeoutMs);
             }
 
@@ -467,7 +481,9 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 return;
               }
               debug(`using ${usingManagedMediaSource ? "ManagedMediaSource" : "MediaSource"}`);
-              const supported = videoCodecs.filter((codec) =>
+              const requestedCodecs = useStandardCodecNegotiation ? standardCodecs : videoCodecs;
+              debug(`requesting ${useStandardCodecNegotiation ? "standard" : "video-only"} codec negotiation`);
+              const supported = requestedCodecs.filter((codec) =>
                 MediaSourceConstructor.isTypeSupported(`video/mp4; codecs="${codec}"`)
               ).join();
               if (!supported) {
