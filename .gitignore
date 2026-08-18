@@ -1,5 +1,28 @@
 # Per-Mac build settings. Never commit a developer's Team ID or local Xcode path.
 build.local.env
+release.local.env
+
+# Signing identities, provisioning profiles, notarization API keys, and secrets.
+*.p12
+*.pfx
+*.p8
+*.key
+*.pem
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+*.developerprofile
+.env
+.env.*
+!.env.example
+
+# Local release artifacts and Xcode archives.
+dist/
+*.xcarchive
+*.dmg
+*.pkg
 
 # Per-user Xcode workspace state.
 **/xcuserdata/
+*.xcuserstate

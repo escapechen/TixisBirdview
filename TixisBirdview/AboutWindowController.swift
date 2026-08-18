@@ -9,12 +9,20 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AboutWindowController {
+final class AboutWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    private let onWindowVisibilityChanged: (Bool) -> Void
+
+    init(onWindowVisibilityChanged: @escaping (Bool) -> Void = { _ in }) {
+        self.onWindowVisibilityChanged = onWindowVisibilityChanged
+    }
 
     func show() {
         if let window {
-            NSApp.activate()
+            if !window.isVisible {
+                onWindowVisibilityChanged(true)
+            }
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -24,13 +32,18 @@ final class AboutWindowController {
         window.title = "About TixisBirdview"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
 
         self.window = window
 
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate()
+        onWindowVisibilityChanged(true)
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onWindowVisibilityChanged(false)
     }
 }
 
@@ -38,6 +51,7 @@ private struct AboutView: View {
     private static let repositoryURL = URL(string: "https://github.com/escapechen/TixisBirdview")!
     private static let changelogURL = repositoryURL.appending(path: "blob/main/CHANGELOG.md")
     private static let licenseURL = repositoryURL.appending(path: "blob/main/LICENSE")
+    private static let privacyURL = repositoryURL.appending(path: "blob/main/PRIVACY.md")
     private static let frigateURL = URL(string: "https://frigate.video")!
 
     var body: some View {
@@ -45,6 +59,7 @@ private struct AboutView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 96, height: 96)
+                .accessibilityLabel("TixisBirdview icon")
 
             VStack(spacing: 4) {
                 Text("TixisBirdview")
@@ -65,7 +80,8 @@ private struct AboutView: View {
 
             VStack(spacing: 8) {
                 Link("TixisBirdview on GitHub", destination: Self.repositoryURL)
-                Link("View changelog", destination: Self.changelogURL)
+                Link("View Changelog", destination: Self.changelogURL)
+                Link("Privacy", destination: Self.privacyURL)
             }
             .font(.callout)
 

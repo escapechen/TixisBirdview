@@ -5,7 +5,7 @@ to compile the app on your Mac.
 
 ## Before you start
 
-- A Mac with a current macOS version.
+- A Mac running macOS 14 Sonoma or newer.
 - An Apple Account. A free account is sufficient for a personal development
   build.
 - Around 15 GB of free disk space for Xcode.
@@ -82,7 +82,8 @@ included when you share or update the project.
    ```
 
    The script runs the local automated tests first. It only builds and installs
-   the app when they pass.
+   the app when they pass. Release builds are universal and contain both Intel
+   (`x86_64`) and Apple Silicon (`arm64`) code.
 
 4. Enter your Mac administrator password when asked. It is used only to place
    the finished app in `/Applications`.
@@ -120,4 +121,6 @@ before installation.
 
 Download the newer source ZIP, repeat the build command, and allow macOS to
 replace the existing app. Your TixisBirdview settings and Keychain password
-remain on your Mac.
+remain on your Mac. The app's **Check for Updates…** command can tell you when
+a newer stable GitHub Release exists, but it never downloads or installs code
+automatically.

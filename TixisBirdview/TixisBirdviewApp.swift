@@ -26,34 +26,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
     private var settingsWindowController: SettingsWindowController?
     private var aboutWindowController: AboutWindowController?
+    private var updateChecker: UpdateChecker?
+    private var activationController: ApplicationActivationController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        AppVersionInfo.incrementRunBuildNumber()
-
         let monitor = FrigateMonitor()
         let overlayController = OverlayWindowController()
-        let settingsWindowController = SettingsWindowController(monitor: monitor)
-        let aboutWindowController = AboutWindowController()
+        let updateChecker = UpdateChecker()
+        let activationController = ApplicationActivationController()
+        let applyDockIconPreference: (Bool) -> Void = { showDockIcon in
+            activationController.updateDockIconVisibility(showDockIcon)
+        }
+        let settingsWindowController = SettingsWindowController(
+            monitor: monitor,
+            updateChecker: updateChecker,
+            onDockIconPreferenceChanged: applyDockIconPreference,
+            onWindowVisibilityChanged: {
+                activationController.updateUtilityWindow("settings", isVisible: $0)
+            }
+        )
+        let aboutWindowController = AboutWindowController(
+            onWindowVisibilityChanged: {
+                activationController.updateUtilityWindow("about", isVisible: $0)
+            }
+        )
+        self.updateChecker = updateChecker
+        self.activationController = activationController
+        activationController.applyCurrentPolicy()
         configureAppIcon()
         configureMainMenu(
             settingsWindowController: settingsWindowController,
-            aboutWindowController: aboutWindowController
+            aboutWindowController: aboutWindowController,
+            updateChecker: updateChecker
         )
         let statusItemController = StatusItemController(
             monitor: monitor,
+            updateChecker: updateChecker,
             onOpenSettings: { [settingsWindowController] in
                 settingsWindowController.show()
             },
             onOpenAbout: { [aboutWindowController] in
                 aboutWindowController.show()
             },
-            onDockIconPreferenceChanged: { showDockIcon in
-                NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
-                if showDockIcon {
-                    NSApp.activate()
-                }
-            }
+            onDockIconPreferenceChanged: applyDockIconPreference
         )
+        updateChecker.onUpdateAvailable = { [weak statusItemController] release in
+            statusItemController?.notifyUpdateAvailable(release)
+        }
 
         overlayController.configure(with: monitor)
 
@@ -70,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         monitor.start()
+        updateChecker.performAutomaticCheckIfNeeded()
 
         self.monitor = monitor
         self.overlayController = overlayController
@@ -88,6 +108,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        statusItemController?.makeDockMenu()
+    }
+
     private func configureAppIcon() {
         guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
               let iconImage = NSImage(contentsOf: iconURL) else {
@@ -99,7 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func configureMainMenu(
         settingsWindowController: SettingsWindowController,
-        aboutWindowController: AboutWindowController
+        aboutWindowController: AboutWindowController,
+        updateChecker: UpdateChecker
     ) {
         let mainMenu = NSMenu()
         let appMenuItem = NSMenuItem(title: "TixisBirdview", action: nil, keyEquivalent: "")
@@ -114,11 +139,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         appMenu.addItem(
             NSMenuItem(
-                title: "Settings...",
+                title: "Settings…",
                 action: #selector(showSettings),
                 keyEquivalent: ","
             )
         )
+        appMenu.addItem(
+            NSMenuItem(
+                title: "Check for Updates…",
+                action: #selector(checkForUpdates),
+                keyEquivalent: ""
+            )
+        )
+        appMenu.addItem(.separator())
+
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: "Services")
+        servicesItem.submenu = servicesMenu
+        appMenu.addItem(servicesItem)
+        NSApp.servicesMenu = servicesMenu
+
         appMenu.addItem(.separator())
         let hideItem = NSMenuItem(
             title: "Hide TixisBirdview",
@@ -155,7 +195,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.items
             .filter {
-                $0.action == #selector(showAbout) || $0.action == #selector(showSettings)
+                $0.action == #selector(showAbout)
+                    || $0.action == #selector(showSettings)
+                    || $0.action == #selector(checkForUpdates)
             }
             .forEach { $0.target = self }
         appMenuItem.submenu = appMenu
@@ -163,6 +205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        let redoItem = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redoItem)
+        editMenu.addItem(.separator())
         editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
         editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
         editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
@@ -180,5 +227,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAbout() {
         aboutWindowController?.show()
+    }
+
+    @objc private func checkForUpdates() {
+        updateChecker?.checkAndPresentResult()
     }
 }

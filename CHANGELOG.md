@@ -4,10 +4,62 @@ All notable user-facing changes are recorded here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning when releases are tagged.
 
-## [1.1.0] — Unreleased
+## [1.1.0] — 2026-08-18
+
+### Added
+
+- The Dock icon now has a native context menu with connection status, last
+  activity, monitoring, feed, duration, Settings, update, and About commands.
+  This keeps the app usable when macOS hides its menu-bar icon.
+- A standard **Check for Updates…** command and General settings pane can check
+  GitHub Releases automatically or on demand. The checker only reports and
+  opens releases, shows at most one non-activating notice per version, and
+  never downloads or installs an update silently.
+- A privacy policy and bundled Apple privacy manifest document local settings,
+  Keychain use, configured network connections, and the GitHub update check.
+- A destructive-confirmation **Delete All App Data…** action removes app
+  preferences and all TixisBirdview Frigate/MQTT Keychain credentials, then
+  quits so the next launch starts clean.
+- A public security policy provides private vulnerability reporting, while the
+  local release workflow runs tests and release-safety checks before signing.
+- A one-command Developer ID release workflow builds, notarizes, staples, and
+  verifies a DMG and produces its SHA-256 checksum without storing credentials
+  in the repository.
+- Public-tree, staged-commit, and release guards reject signing identities,
+  private key/profile files, private infrastructure, tokens, and machine-local
+  paths.
+
+### Changed
+
+- Settings now use four stable native toolbar panes, restore the last pane,
+  present the selected pane name as the window title, and expose application
+  and update preferences under **General**.
+- The application and menu-bar menus use standard macOS command naming,
+  grouping, ellipses, Services, and Undo/Redo commands.
+- About now displays only the signed bundle's version and build number instead
+  of appending a launch counter.
+- The app is categorized as a macOS utility and no longer requests unused
+  user-selected-file or app-group capabilities.
+- Lowered the deployment target from macOS 26.5 to macOS 14 Sonoma after an
+  unsigned compatibility build, so release builds can support more Macs.
+- Release builds are now universal (`arm64` and `x86_64`), and the local
+  installer verifies both architectures before replacing the installed app.
+- Event and review deduplication histories now use bounded 512-entry caches,
+  preventing memory growth in a long-running menu-bar session.
+- Frigate's authenticated camera-to-go2rtc mapping refreshes every five minutes
+  and retries missing cameras after 30 seconds, so configuration changes no
+  longer require restarting the app.
+- Release versions now consistently use semantic `MAJOR.MINOR.PATCH` numbering
+  and a separate monotonically increasing integer build number.
 
 ### Fixed
 
+- When the Dock icon is disabled, closing the last Settings/About window now
+  restores accessory-app behavior; the app remains regular while either
+  user-requested window is open.
+- Live-player teardown no longer starts a blank replacement page while WebKit
+  is already destroying the view, reducing harmless RunningBoard assertion
+  warnings after closing a feed or quitting the app.
 - Live video keeps a user-visible activity assertion while its non-activating
   overlay is open, preventing macOS from deferring WebKit playback when the
   menu-bar app is inactive. Normal idle system sleep remains allowed.
@@ -26,6 +78,18 @@ versioning when releases are tagged.
 - If go2rtc negotiates video-only MSE but sends only its initializer, the player
   retries once with Frigate's standard codec set and reports a source failure
   separately from a genuine macOS decoding failure.
+
+### Security
+
+- Frigate passwords are now scoped to the normalized server and username. A
+  legacy username-only Keychain item migrates only to the previously saved
+  server, so changing servers cannot reuse its password.
+- Server addresses without a scheme now default to HTTPS. Explicit Frigate HTTP
+  and MQTT without TLS show persistent warnings and require confirmation.
+- Authenticated HTTP redirects are limited to the same origin, preventing
+  cross-origin credential redirects and HTTPS-to-HTTP downgrades.
+- Added the macOS local-network privacy purpose string for user-configured
+  Frigate and MQTT connections.
 
 ## [1.0.0]
 

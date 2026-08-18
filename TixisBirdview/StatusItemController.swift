@@ -11,10 +11,11 @@ import SwiftUI
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let monitor: FrigateMonitor
+    private let updateChecker: UpdateChecker
     private let onOpenSettings: () -> Void
     private let onOpenAbout: () -> Void
     private let onDockIconPreferenceChanged: (Bool) -> Void
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let statusItem: NSStatusItem?
     private let menu = NSMenu()
     private let connectionNoticePanel = makeConnectionNoticePanel()
     private static let dockIconPreferenceKey = "showDockIcon"
@@ -23,21 +24,27 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     init(
         monitor: FrigateMonitor,
+        updateChecker: UpdateChecker,
         onOpenSettings: @escaping () -> Void,
         onOpenAbout: @escaping () -> Void,
-        onDockIconPreferenceChanged: @escaping (Bool) -> Void
+        onDockIconPreferenceChanged: @escaping (Bool) -> Void,
+        installsStatusItem: Bool = true
     ) {
         self.monitor = monitor
+        self.updateChecker = updateChecker
         self.onOpenSettings = onOpenSettings
         self.onOpenAbout = onOpenAbout
         self.onDockIconPreferenceChanged = onDockIconPreferenceChanged
+        statusItem = installsStatusItem
+            ? NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            : nil
         super.init()
 
         menu.delegate = self
-        statusItem.menu = menu
-        statusItem.isVisible = true
+        statusItem?.menu = menu
+        statusItem?.isVisible = true
 
-        if let button = statusItem.button {
+        if let button = statusItem?.button {
             button.title = ""
             button.toolTip = "TixisBirdview"
         }
@@ -47,7 +54,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     func updateIcon(for connectionState: FrigateMonitor.ConnectionState) {
-        guard let button = statusItem.button else {
+        guard let button = statusItem?.button else {
             return
         }
 
@@ -69,52 +76,75 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func showMenu() {
         rebuildMenu()
 
-        guard let button = statusItem.button else {
+        guard let button = statusItem?.button else {
             return
         }
 
         button.performClick(nil)
     }
 
+    func notifyUpdateAvailable(_ release: PublishedAppRelease) {
+        showConnectionNotice(
+            title: "Update available",
+            message: "TixisBirdview \(release.version) is ready on GitHub.",
+            systemImage: "arrow.down.circle.fill",
+            tint: .blue
+        )
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         rebuildMenu()
     }
 
-    private func rebuildMenu() {
-        menu.removeAllItems()
+    func makeDockMenu() -> NSMenu {
+        let dockMenu = NSMenu(title: "TixisBirdview")
+        populateMenu(
+            dockMenu,
+            includesAppTitle: false,
+            includesDockManagement: false,
+            includesQuit: false
+        )
+        return dockMenu
+    }
 
-        let titleItem = NSMenuItem(title: "TixisBirdview", action: nil, keyEquivalent: "")
-        titleItem.isEnabled = false
-        menu.addItem(titleItem)
+    private func rebuildMenu() {
+        if let release = updateChecker.availableRelease {
+            statusItem?.button?.toolTip = "TixisBirdview \(release.version) is available"
+        } else {
+            statusItem?.button?.toolTip = "TixisBirdview"
+        }
+
+        populateMenu(
+            menu,
+            includesAppTitle: true,
+            includesDockManagement: true,
+            includesQuit: true
+        )
+    }
+
+    private func populateMenu(
+        _ targetMenu: NSMenu,
+        includesAppTitle: Bool,
+        includesDockManagement: Bool,
+        includesQuit: Bool
+    ) {
+        targetMenu.removeAllItems()
+
+        if includesAppTitle {
+            let titleItem = NSMenuItem(title: "TixisBirdview", action: nil, keyEquivalent: "")
+            titleItem.isEnabled = false
+            targetMenu.addItem(titleItem)
+        }
 
         let statusItem = NSMenuItem(title: "Status: \(monitor.connectionState.title)", action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
-        menu.addItem(statusItem)
+        targetMenu.addItem(statusItem)
 
         let eventItem = NSMenuItem(title: "Last: \(monitor.lastEventDescription)", action: nil, keyEquivalent: "")
         eventItem.isEnabled = false
-        menu.addItem(eventItem)
+        targetMenu.addItem(eventItem)
 
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        let aboutItem = NSMenuItem(title: "About TixisBirdview", action: #selector(openAbout), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-
-        let durationItem = NSMenuItem(title: "Keep Feed Open", action: nil, keyEquivalent: "")
-        durationItem.submenu = durationMenu()
-        menu.addItem(durationItem)
-
-        let dockIconItem = NSMenuItem(title: "Show Dock Icon", action: #selector(toggleDockIcon), keyEquivalent: "")
-        dockIconItem.target = self
-        dockIconItem.state = showsDockIcon ? .on : .off
-        menu.addItem(dockIconItem)
-
-        menu.addItem(.separator())
+        targetMenu.addItem(.separator())
 
         let monitoringItem = NSMenuItem(
             title: monitor.isMonitoring ? "Pause Monitoring" : "Start Monitoring",
@@ -122,17 +152,49 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             keyEquivalent: ""
         )
         monitoringItem.target = self
-        menu.addItem(monitoringItem)
+        targetMenu.addItem(monitoringItem)
 
         let showFeedItem = NSMenuItem(title: "Show Feed", action: #selector(showFeed), keyEquivalent: "")
         showFeedItem.target = self
-        menu.addItem(showFeedItem)
+        targetMenu.addItem(showFeedItem)
 
-        menu.addItem(.separator())
+        let durationItem = NSMenuItem(title: "Keep Feed Open", action: nil, keyEquivalent: "")
+        durationItem.submenu = durationMenu()
+        targetMenu.addItem(durationItem)
 
-        let quitItem = NSMenuItem(title: "Quit TixisBirdview", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
+        targetMenu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        targetMenu.addItem(settingsItem)
+
+        let updateItem = NSMenuItem(
+            title: updateChecker.menuItemTitle,
+            action: #selector(checkForUpdates),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        updateItem.isEnabled = !updateChecker.isChecking
+        targetMenu.addItem(updateItem)
+
+        let aboutItem = NSMenuItem(title: "About TixisBirdview", action: #selector(openAbout), keyEquivalent: "")
+        aboutItem.target = self
+        targetMenu.addItem(aboutItem)
+
+        if includesDockManagement {
+            let dockIconItem = NSMenuItem(title: "Show Dock Icon", action: #selector(toggleDockIcon), keyEquivalent: "")
+            dockIconItem.target = self
+            dockIconItem.state = showsDockIcon ? .on : .off
+            targetMenu.addItem(dockIconItem)
+        }
+
+        if includesQuit {
+            targetMenu.addItem(.separator())
+
+            let quitItem = NSMenuItem(title: "Quit TixisBirdview", action: #selector(quit), keyEquivalent: "q")
+            quitItem.target = self
+            targetMenu.addItem(quitItem)
+        }
     }
 
     private func durationMenu() -> NSMenu {
@@ -157,6 +219,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.onOpenAbout()
         }
+    }
+
+    @objc private func checkForUpdates() {
+        updateChecker.checkAndPresentResult()
     }
 
     @objc private func setOverlayDuration(_ sender: NSMenuItem) {
@@ -231,7 +297,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         )
         connectionNoticePanel.setContentSize(NSSize(width: 284, height: 88))
 
-        let screen = statusItem.button?.window?.screen ?? NSScreen.main
+        let screen = statusItem?.button?.window?.screen ?? NSScreen.main
         if let visibleFrame = screen?.visibleFrame {
             let noticeFrame = connectionNoticePanel.frame
             connectionNoticePanel.setFrameOrigin(

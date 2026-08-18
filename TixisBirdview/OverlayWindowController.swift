@@ -92,7 +92,9 @@ final class OverlayWindowController: NSObject, NSWindowDelegate {
             panel.animator().alphaValue = 1
             panel.animator().setFrame(finalFrame, display: true)
         } completionHandler: { [weak self] in
-            self?.framePersistenceGate.endProgrammaticChange()
+            Task { @MainActor [weak self] in
+                self?.framePersistenceGate.endProgrammaticChange()
+            }
         }
     }
 

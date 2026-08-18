@@ -8,27 +8,15 @@
 import Foundation
 
 enum AppVersionInfo {
-    private static let runBuildNumberKey = "runBuildNumber"
-
-    static func incrementRunBuildNumber() {
-        let nextBuildNumber = runBuildNumber + 1
-        UserDefaults.standard.set(nextBuildNumber, forKey: runBuildNumberKey)
-    }
-
     static var displayVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
     }
 
     static var bundleBuildNumber: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
-    }
-
-    static var runBuildNumber: Int {
-        let storedBuildNumber = UserDefaults.standard.integer(forKey: runBuildNumberKey)
-        return max(storedBuildNumber, 0)
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "2"
     }
 
     static var displayBuild: String {
-        "\(bundleBuildNumber).\(runBuildNumber)"
+        bundleBuildNumber
     }
 }

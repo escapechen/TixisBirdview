@@ -9,7 +9,7 @@
 
 ## Start here
 
-1. Read `README.md`, then the relevant document under `docs/`.
+1. Read `README.md`, then `TODO.md`, then the relevant document under `docs/`.
 2. Use codebase-memory MCP for code discovery (`search_graph`, `trace_path`,
    then `get_code_snippet`). Use `rg` for literal strings and non-code files.
 3. Check `git status --short` before editing; preserve unrelated user changes.
@@ -24,6 +24,8 @@
   display geometry.
 - `SettingsMenuView.swift`: settings UI and classification selection.
 - `StatusItemController.swift`: menu-bar state and connection notices.
+- `UpdateChecker.swift`: daily/manual GitHub release discovery and semantic
+  version comparison. It informs only; it never downloads or installs updates.
 
 Live stream routing must use the Frigate config mapping
 `cameras.<camera>.live.streams`; an event camera name is not necessarily the
@@ -33,7 +35,7 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
   live media only through Frigate's existing authenticated HTTPS/WSS proxy;
   never require users to expose extra go2rtc ports or unencrypted/unauthenticated
   streams.
-- The sibling repository `/Users/marcel/Documents/repos/frigateHOMELAN` is the
+- The sibling repository `../frigateHOMELAN` is the
   server-side source used by Marcel's custom Frigate installation. Inspect and,
   when explicitly requested, coordinate compatible changes across both repos.
 
@@ -56,7 +58,13 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
   required `TEAM_ID` and optional `CONFIGURATION`/`DEVELOPER_DIR`; keep only
   the example file tracked. Do not infer the Team ID from a development
   certificate's displayed member ID.
-- Fast checks: `git diff --check` and `bash -n build-and-install.sh`.
+- Versioning is semantic `MARKETING_VERSION` plus a monotonically increasing
+  integer `CURRENT_PROJECT_VERSION`; validate with
+  `./scripts/check-versioning.sh`. Current source is 1.1.0 (build 2).
+- Fast checks: `./scripts/check-public-safety.sh`,
+  `./scripts/check-versioning.sh`, `git diff --check`, and shell syntax checks.
+- `./build-and-install.sh --test` runs the complete local suite without signing
+  or installing the app.
 - After Swift behavior changes, run the XCTest suite:
 
   ```sh
@@ -85,12 +93,22 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
     CODE_SIGNING_ALLOWED=NO build
   ```
 
-  The project may emit an existing warning that `Info.plist` appears in Copy
-  Bundle Resources; report it, but do not confuse it with a build failure.
+  `Info.plist` is excluded from Copy Bundle Resources. Treat a recurrence of
+  that warning as a project-configuration regression.
 
 ## Release and collaboration
 
-- Read `docs/RELEASING.md` before release work.
+- Read `TODO.md` and `docs/RELEASING.md` before release work. Do not describe a
+  signed-binary release as ready while a P0 item remains open.
+- `./build-signed-release.sh` is the Developer ID/notarization/DMG workflow;
+  `scripts/configure-notarization.sh` stores its credential profile in Keychain.
+  `release.local.env`, `dist/`, identities, certificates, and profiles are
+  local-only. Never expose their values in output or commit them.
+- The local release workflow runs the public-tree leak guard. Contributors
+  should install the staged pre-commit guard once with
+  `./scripts/install-git-hooks.sh`.
+- Direct releases use the informational GitHub channel. App Store builds must
+  disable it and use Mac App Store updates instead.
 - Current code is MIT licensed; keep `LICENSE`, `AUTHORS.md`, and
   `THIRD_PARTY_NOTICES.md` accurate when changing attribution.
 - The app credits Marcel Kühn and OpenAI Codex (GPT-5.6 Terra, Extra High

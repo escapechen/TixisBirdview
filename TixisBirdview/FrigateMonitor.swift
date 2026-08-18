@@ -11,6 +11,47 @@ import Observation
 import Security
 import SwiftUI
 
+enum SecureRedirectPolicy {
+    static func allowsRedirect(from sourceURL: URL, to destinationURL: URL) -> Bool {
+        guard let sourceOrigin = originComponents(for: sourceURL),
+              let destinationOrigin = originComponents(for: destinationURL) else {
+            return false
+        }
+
+        return sourceOrigin == destinationOrigin
+    }
+
+    private static func originComponents(for url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+
+        let port = url.port ?? (scheme == "https" ? 443 : 80)
+        return "\(scheme)://\(host):\(port)"
+    }
+}
+
+final class SecureURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let sourceURL = response.url,
+              let destinationURL = request.url,
+              SecureRedirectPolicy.allowsRedirect(from: sourceURL, to: destinationURL) else {
+            completionHandler(nil)
+            return
+        }
+
+        completionHandler(request)
+    }
+}
+
 struct FrigateLoginRequest {
     static func make(baseURL: URL, username: String, password: String) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appending(path: "api/login"))
@@ -198,6 +239,7 @@ final class FrigateMonitor {
         case unsupportedScheme
         case missingHost
         case invalidPort
+        case insecureTransportRequiresConfirmation
 
         var errorDescription: String? {
             switch self {
@@ -211,6 +253,8 @@ final class FrigateMonitor {
                 "Enter a host or IP address."
             case .invalidPort:
                 "Use a numeric port from 1 to 65535."
+            case .insecureTransportRequiresConfirmation:
+                "HTTP is not encrypted. Review the warning and explicitly confirm this connection."
             }
         }
     }
@@ -249,6 +293,20 @@ final class FrigateMonitor {
         }
     }
 
+    enum DataResetError: LocalizedError {
+        case keychain(OSStatus)
+        case missingBundleIdentifier
+
+        var errorDescription: String? {
+            switch self {
+            case .keychain(let status):
+                "Could not delete credentials from the macOS Keychain (\(status))."
+            case .missingBundleIdentifier:
+                "Could not identify the app preferences to delete."
+            }
+        }
+    }
+
     enum MqttConfigurationError: LocalizedError {
         case missingHost
         case invalidHost
@@ -256,6 +314,7 @@ final class FrigateMonitor {
         case missingTopicPrefix
         case passwordWithoutUsername
         case missingPassword
+        case insecureTransportRequiresConfirmation
         case keychain(OSStatus)
 
         var errorDescription: String? {
@@ -272,6 +331,8 @@ final class FrigateMonitor {
                 "Enter an MQTT username with the password."
             case .missingPassword:
                 "Enter the MQTT password."
+            case .insecureTransportRequiresConfirmation:
+                "MQTT without TLS is not encrypted. Review the warning and explicitly confirm this connection."
             case .keychain(let status):
                 "Could not access the macOS Keychain (\(status))."
             }
@@ -505,13 +566,15 @@ final class FrigateMonitor {
         onMessage: { _, _ in }
     )
     @ObservationIgnored private var overlayDismissalTask: Task<Void, Never>?
-    @ObservationIgnored private var seenEventIDs = Set<String>()
-    @ObservationIgnored private var seenReviewItemIDs = Set<String>()
+    @ObservationIgnored private var seenEventIDs = RecentIdentifierCache(capacity: 512)
+    @ObservationIgnored private var seenReviewItemIDs = RecentIdentifierCache(capacity: 512)
     @ObservationIgnored private var urlSession: URLSession
-    @ObservationIgnored private let passwordProvider: (String) throws -> String?
+    @ObservationIgnored private let passwordProvider: (String, String) throws -> String?
     @ObservationIgnored private var hasAuthenticatedSession = false
     @ObservationIgnored private var isLoadingLiveStreamNames = false
     private var hasLoadedLiveStreamNames = false
+    @ObservationIgnored private var liveStreamNamesLoadedAt: Date?
+    @ObservationIgnored private var liveStreamNamesRefreshAttemptedAt: Date?
     @ObservationIgnored private var alertSoundPlayer: NSSound?
     @ObservationIgnored private var lastAlertSoundDate: Date?
     @ObservationIgnored private var lastAutomaticPopupDate: Date?
@@ -538,19 +601,24 @@ final class FrigateMonitor {
     private static let soundCooldownEnabledKey = "soundCooldownEnabled"
     private static let soundCooldownKey = "soundCooldownSeconds"
     private static let selectedClassificationsKey = "selectedClassificationNames"
+    private static let confirmedInsecureServerAddressKey = "confirmedInsecureServerAddress"
+    private static let confirmedInsecureMqttEndpointKey = "confirmedInsecureMqttEndpoint"
     private static let defaultServerAddress = "https://frigate.invalid"
     private static let defaultOverlayDurationSeconds = 20.0
     private static let defaultLiveStartupTimeoutSeconds = 5
     private static let defaultSoundAlertVolume = 0.6
     private static let defaultCooldownSeconds = 60
+    private static let liveStreamMappingRefreshInterval: TimeInterval = 5 * 60
+    private static let missingLiveStreamMappingRetryInterval: TimeInterval = 30
     private static let defaultSelectedClassificationNames: Set<String> = ["bird", "cat", "bruno"]
     private static let keychainService = "org.tixisbirdview.app.frigate"
     private static let mqttKeychainService = "org.tixisbirdview.app.mqtt"
 
     init(
         urlSession: URLSession? = nil,
-        passwordProvider: ((String) throws -> String?)? = nil
+        passwordProvider: ((String, String) throws -> String?)? = nil
     ) {
+        let usesSystemKeychain = passwordProvider == nil
         self.urlSession = urlSession ?? Self.makeURLSession()
         self.passwordProvider = passwordProvider ?? Self.savedPassword
         let savedOverlayDuration = UserDefaults.standard.double(forKey: Self.overlayDurationKey)
@@ -607,11 +675,30 @@ final class FrigateMonitor {
             UserDefaults.standard.set(serverAddress, forKey: Self.serverAddressKey)
             serverAddressError = "Saved server address was invalid and has been reset."
         }
+        if usesSystemKeychain, !username.isEmpty {
+            try? Self.migrateLegacyPasswordIfNeeded(
+                serverAddress: serverAddress,
+                username: username
+            )
+        }
+        if !isFrigateTransportApproved {
+            serverAddressError = ServerAddressValidationError
+                .insecureTransportRequiresConfirmation
+                .localizedDescription
+        }
         availableClassificationNames = selectedClassificationNames.sorted()
     }
 
     var baseURL: URL? {
-        URL(string: serverAddress)
+        guard isFrigateTransportApproved else {
+            return nil
+        }
+        return URL(string: serverAddress)
+    }
+
+    private var isFrigateTransportApproved: Bool {
+        !Self.requiresInsecureTransportConfirmation(serverAddress)
+            || UserDefaults.standard.string(forKey: Self.confirmedInsecureServerAddressKey) == serverAddress
     }
 
     var currentFeedCameraName: String {
@@ -734,6 +821,18 @@ final class FrigateMonitor {
         eventDeliveryStatus = "Event delivery is stopped."
     }
 
+    func deleteAllStoredData() throws {
+        stop()
+        mqttVerifier.stop()
+        shouldShowOverlay = false
+        try Self.deleteAllStoredCredentials()
+
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            throw DataResetError.missingBundleIdentifier
+        }
+        UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
+    }
+
     func toggleMonitoring() {
         if isMonitoring {
             stop()
@@ -761,7 +860,8 @@ final class FrigateMonitor {
         useTLS: Bool,
         username newUsername: String,
         password: String,
-        topicPrefix: String
+        topicPrefix: String,
+        allowInsecureTransport: Bool = false
     ) -> Bool {
         do {
             let normalizedHost = try Self.validatedMqttHost(host)
@@ -769,11 +869,22 @@ final class FrigateMonitor {
             guard (1...65535).contains(port) else {
                 throw MqttConfigurationError.invalidPort
             }
+            guard useTLS || allowInsecureTransport else {
+                throw MqttConfigurationError.insecureTransportRequiresConfirmation
+            }
             try updateMqttCredentials(host: normalizedHost, username: newUsername, password: password)
             mqttBrokerHost = normalizedHost
             mqttBrokerPort = port
             mqttUsesTLS = useTLS
             mqttTopicPrefix = normalizedTopicPrefix
+            if useTLS {
+                UserDefaults.standard.removeObject(forKey: Self.confirmedInsecureMqttEndpointKey)
+            } else {
+                UserDefaults.standard.set(
+                    Self.mqttEndpointScope(host: normalizedHost, port: port),
+                    forKey: Self.confirmedInsecureMqttEndpointKey
+                )
+            }
             mqttVerificationStatus = nil
         } catch {
             mqttVerificationStatus = "MQTT settings were not applied: \(error.localizedDescription)"
@@ -815,12 +926,29 @@ final class FrigateMonitor {
     func applyConnectionSettings(
         _ address: String,
         username newUsername: String,
-        password: String
+        password: String,
+        allowInsecureTransport: Bool = false
     ) -> Bool {
         do {
             let validatedAddress = try Self.validatedServerAddress(address)
-            try updateCredentials(username: newUsername, password: password)
+            guard !Self.requiresInsecureTransportConfirmation(validatedAddress)
+                    || allowInsecureTransport else {
+                throw ServerAddressValidationError.insecureTransportRequiresConfirmation
+            }
+            try updateCredentials(
+                serverAddress: validatedAddress,
+                username: newUsername,
+                password: password
+            )
             serverAddress = validatedAddress
+            if Self.requiresInsecureTransportConfirmation(validatedAddress) {
+                UserDefaults.standard.set(
+                    validatedAddress,
+                    forKey: Self.confirmedInsecureServerAddressKey
+                )
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.confirmedInsecureServerAddressKey)
+            }
             serverAddressError = nil
         } catch {
             serverAddressError = error.localizedDescription
@@ -882,6 +1010,11 @@ final class FrigateMonitor {
         let topicPrefix = try Self.validatedMqttTopicPrefix(mqttTopicPrefix)
         guard (1...65535).contains(mqttBrokerPort) else {
             throw MqttConfigurationError.invalidPort
+        }
+        guard mqttUsesTLS
+                || UserDefaults.standard.string(forKey: Self.confirmedInsecureMqttEndpointKey)
+                    == Self.mqttEndpointScope(host: host, port: mqttBrokerPort) else {
+            throw MqttConfigurationError.insecureTransportRequiresConfirmation
         }
         let normalizedUsername = mqttUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         let password: String
@@ -947,7 +1080,14 @@ final class FrigateMonitor {
             return
         }
 
-        await ensureLiveStreamNamesLoaded()
+        await ensureLiveStreamNamesLoaded(
+            forceRefresh: Self.shouldRefreshLiveStreamMapping(
+                for: currentFeedCameraName,
+                streamNames: liveStreamNames,
+                loadedAt: liveStreamNamesLoadedAt,
+                lastAttemptAt: liveStreamNamesRefreshAttemptedAt
+            )
+        )
 
         async let reviewItemsResult = fetchRecentReviewItems()
         async let eventsResult = fetchRecentEvents()
@@ -1054,8 +1194,9 @@ final class FrigateMonitor {
         }
 
         latestReviewItem = newestItem
+        scheduleLiveStreamMappingRefreshIfNeeded(for: newestItem.camera)
 
-        let isNewItem = seenReviewItemIDs.insert(newestItem.id).inserted
+        let isNewItem = seenReviewItemIDs.insert(newestItem.id)
         let isRecent = Date().timeIntervalSince(newestItem.activityDate) < 120
         if isNewItem && isRecent {
             lastEventDescription = newestItem.displayDescription
@@ -1084,8 +1225,9 @@ final class FrigateMonitor {
 
         latestEvent = newestEvent
         lastEventDescription = newestEvent.displayDescription
+        scheduleLiveStreamMappingRefreshIfNeeded(for: newestEvent.camera)
 
-        let isNewEvent = seenEventIDs.insert(newestEvent.id).inserted
+        let isNewEvent = seenEventIDs.insert(newestEvent.id)
         let isRecent = Date().timeIntervalSince(newestEvent.startedAt) < 90
         if isNewEvent && isRecent {
             presentAutomaticAlert(
@@ -1209,12 +1351,14 @@ final class FrigateMonitor {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
-    func ensureLiveStreamNamesLoaded() async {
-        guard !isLoadingLiveStreamNames, !hasLoadedLiveStreamNames else {
+    func ensureLiveStreamNamesLoaded(forceRefresh: Bool = false) async {
+        guard !isLoadingLiveStreamNames,
+              forceRefresh || !hasLoadedLiveStreamNames else {
             return
         }
 
         isLoadingLiveStreamNames = true
+        liveStreamNamesRefreshAttemptedAt = Date()
         liveStreamRoutingError = nil
         defer { isLoadingLiveStreamNames = false }
 
@@ -1232,6 +1376,7 @@ final class FrigateMonitor {
         let previousStreamName = currentFeedStreamName
         liveStreamNames = streamNames
         hasLoadedLiveStreamNames = true
+        liveStreamNamesLoadedAt = Date()
         liveStreamRoutingError = nil
 
         // A popup may have started with its camera key before this lookup
@@ -1240,6 +1385,49 @@ final class FrigateMonitor {
            currentFeedStreamName != previousStreamName {
             streamSessionID = UUID()
         }
+    }
+
+    private func scheduleLiveStreamMappingRefreshIfNeeded(for camera: String) {
+        guard feedMode == .stream,
+              Self.shouldRefreshLiveStreamMapping(
+                  for: camera,
+                  streamNames: liveStreamNames,
+                  loadedAt: liveStreamNamesLoadedAt,
+                  lastAttemptAt: liveStreamNamesRefreshAttemptedAt
+              ) else {
+            return
+        }
+
+        Task { [weak self] in
+            await self?.ensureLiveStreamNamesLoaded(forceRefresh: true)
+        }
+    }
+
+    static func shouldRefreshLiveStreamMapping(
+        for camera: String,
+        streamNames: [String: String],
+        loadedAt: Date?,
+        lastAttemptAt: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        guard let loadedAt else {
+            return lastAttemptAt.map {
+                now.timeIntervalSince($0) >= missingLiveStreamMappingRetryInterval
+            } ?? true
+        }
+
+        if now.timeIntervalSince(loadedAt) >= liveStreamMappingRefreshInterval {
+            return lastAttemptAt.map {
+                now.timeIntervalSince($0) >= missingLiveStreamMappingRetryInterval
+            } ?? true
+        }
+
+        guard streamNames[camera] == nil else {
+            return false
+        }
+        return lastAttemptAt.map {
+            now.timeIntervalSince($0) >= missingLiveStreamMappingRetryInterval
+        } ?? true
     }
 
     private func fetchLiveStreamNames() async throws -> [String: String] {
@@ -1276,11 +1464,14 @@ final class FrigateMonitor {
     }
 
     private func authenticateIfNeeded() async throws {
+        guard isFrigateTransportApproved else {
+            throw ServerAddressValidationError.insecureTransportRequiresConfirmation
+        }
         guard !username.isEmpty, !hasAuthenticatedSession else {
             return
         }
 
-        guard let password = try passwordProvider(username) else {
+        guard let password = try passwordProvider(serverAddress, username) else {
             throw AuthenticationError.missingPassword
         }
         guard let baseURL else {
@@ -1320,6 +1511,9 @@ final class FrigateMonitor {
     }
 
     private func requestData(for request: URLRequest) async throws -> Data {
+        guard isFrigateTransportApproved else {
+            throw ServerAddressValidationError.insecureTransportRequiresConfirmation
+        }
         let (data, response) = try await urlSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -1334,8 +1528,13 @@ final class FrigateMonitor {
         return data
     }
 
-    private func updateCredentials(username newUsername: String, password: String) throws {
+    private func updateCredentials(
+        serverAddress newServerAddress: String,
+        username newUsername: String,
+        password: String
+    ) throws {
         let normalizedUsername = newUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousServerAddress = serverAddress
         let previousUsername = username
 
         if normalizedUsername.isEmpty {
@@ -1343,22 +1542,33 @@ final class FrigateMonitor {
                 throw AuthenticationError.passwordWithoutUsername
             }
             if !previousUsername.isEmpty {
-                try Self.deletePassword(for: previousUsername)
+                try Self.deletePassword(
+                    serverAddress: previousServerAddress,
+                    username: previousUsername
+                )
             }
             username = ""
             return
         }
 
         if password.isEmpty {
-            guard try Self.savedPassword(for: normalizedUsername) != nil else {
+            guard try passwordProvider(newServerAddress, normalizedUsername) != nil else {
                 throw AuthenticationError.missingPassword
             }
         } else {
-            try Self.savePassword(password, for: normalizedUsername)
+            try Self.savePassword(
+                password,
+                serverAddress: newServerAddress,
+                username: normalizedUsername
+            )
         }
 
-        if previousUsername != normalizedUsername, !previousUsername.isEmpty {
-            try Self.deletePassword(for: previousUsername)
+        if (previousServerAddress != newServerAddress || previousUsername != normalizedUsername),
+           !previousUsername.isEmpty {
+            try Self.deletePassword(
+                serverAddress: previousServerAddress,
+                username: previousUsername
+            )
         }
         username = normalizedUsername
     }
@@ -1400,6 +1610,8 @@ final class FrigateMonitor {
         urlSession = Self.makeURLSession()
         hasAuthenticatedSession = false
         hasLoadedLiveStreamNames = false
+        liveStreamNamesLoadedAt = nil
+        liveStreamNamesRefreshAttemptedAt = nil
         liveStreamNames = [:]
         liveStreamRoutingError = nil
         availableClassificationNames = []
@@ -1411,13 +1623,17 @@ final class FrigateMonitor {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieAcceptPolicy = .always
         configuration.httpShouldSetCookies = true
-        return URLSession(configuration: configuration)
+        return URLSession(
+            configuration: configuration,
+            delegate: SecureURLSessionDelegate(),
+            delegateQueue: nil
+        )
     }
 
-    private static func savedPassword(for username: String) throws -> String? {
+    private static func savedPassword(serverAddress: String, username: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
+            kSecAttrService as String: keychainServiceName(for: serverAddress),
             kSecAttrAccount as String: username,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
@@ -1436,10 +1652,14 @@ final class FrigateMonitor {
         return password
     }
 
-    private static func savePassword(_ password: String, for username: String) throws {
+    private static func savePassword(
+        _ password: String,
+        serverAddress: String,
+        username: String
+    ) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
+            kSecAttrService as String: keychainServiceName(for: serverAddress),
             kSecAttrAccount as String: username,
         ]
         let data = Data(password.utf8)
@@ -1458,7 +1678,62 @@ final class FrigateMonitor {
         }
     }
 
-    private static func deletePassword(for username: String) throws {
+    private static func deletePassword(serverAddress: String, username: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainServiceName(for: serverAddress),
+            kSecAttrAccount as String: username,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw AuthenticationError.keychain(status)
+        }
+    }
+
+    static func keychainServiceName(for serverAddress: String) -> String {
+        "\(keychainService).\(serverAddress.lowercased())"
+    }
+
+    private static func migrateLegacyPasswordIfNeeded(
+        serverAddress: String,
+        username: String
+    ) throws {
+        guard let legacyPassword = try savedLegacyPassword(for: username) else {
+            return
+        }
+
+        if try savedPassword(serverAddress: serverAddress, username: username) == nil {
+            try savePassword(
+                legacyPassword,
+                serverAddress: serverAddress,
+                username: username
+            )
+        }
+        try deleteLegacyPassword(for: username)
+    }
+
+    private static func savedLegacyPassword(for username: String) throws -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: username,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let password = String(data: data, encoding: .utf8) else {
+            throw AuthenticationError.keychain(status)
+        }
+        return password
+    }
+
+    private static func deleteLegacyPassword(for username: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -1527,8 +1802,59 @@ final class FrigateMonitor {
         }
     }
 
+    private static func deleteAllStoredCredentials() throws {
+        let lookup: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: CFTypeRef?
+        let lookupStatus = SecItemCopyMatching(lookup as CFDictionary, &result)
+        guard lookupStatus == errSecSuccess || lookupStatus == errSecItemNotFound else {
+            throw DataResetError.keychain(lookupStatus)
+        }
+        guard lookupStatus == errSecSuccess else {
+            return
+        }
+
+        let attributes: [[String: Any]]
+        if let allAttributes = result as? [[String: Any]] {
+            attributes = allAttributes
+        } else if let singleAttributes = result as? [String: Any] {
+            attributes = [singleAttributes]
+        } else {
+            attributes = []
+        }
+
+        let serviceNames = Set(attributes.compactMap { attributes in
+            attributes[kSecAttrService as String] as? String
+        }.filter(isOwnedKeychainService))
+
+        for serviceName in serviceNames {
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: serviceName,
+            ]
+            let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+            guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+                throw DataResetError.keychain(deleteStatus)
+            }
+        }
+    }
+
+    static func isOwnedKeychainService(_ serviceName: String) -> Bool {
+        serviceName == keychainService
+            || serviceName.hasPrefix("\(keychainService).")
+            || serviceName == mqttKeychainService
+            || serviceName.hasPrefix("\(mqttKeychainService).")
+    }
+
     private static func mqttKeychainServiceName(for host: String) -> String {
         "\(mqttKeychainService).\(host.lowercased())"
+    }
+
+    private static func mqttEndpointScope(host: String, port: Int) -> String {
+        "\(host.lowercased()):\(port)"
     }
 
     private static func normalizedServerAddress(_ address: String) -> String {
@@ -1537,14 +1863,15 @@ final class FrigateMonitor {
             return defaultServerAddress
         }
 
-        if trimmedAddress.hasPrefix("http://") || trimmedAddress.hasPrefix("https://") {
+        let lowercasedAddress = trimmedAddress.lowercased()
+        if lowercasedAddress.hasPrefix("http://") || lowercasedAddress.hasPrefix("https://") {
             return trimmedAddress.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         }
 
-        return "http://\(trimmedAddress.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
+        return "https://\(trimmedAddress.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
     }
 
-    private static func validatedServerAddress(_ address: String) throws -> String {
+    static func validatedServerAddress(_ address: String) throws -> String {
         let normalizedAddress = normalizedServerAddress(address)
         guard normalizedAddress != defaultServerAddress || !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ServerAddressValidationError.empty
@@ -1593,6 +1920,10 @@ final class FrigateMonitor {
         }
 
         return normalizedAddress
+    }
+
+    static func requiresInsecureTransportConfirmation(_ address: String) -> Bool {
+        normalizedServerAddress(address).lowercased().hasPrefix("http://")
     }
 
     private static func validatedMqttHost(_ host: String) throws -> String {

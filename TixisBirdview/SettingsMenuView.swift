@@ -10,6 +10,7 @@ import Observation
 import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
     case connection
     case feedAndSound
     case popupTriggers
@@ -18,6 +19,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .general: "General"
         case .connection: "Connection"
         case .feedAndSound: "Feed & Sound"
         case .popupTriggers: "Popup Triggers"
@@ -26,6 +28,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .general: "gearshape"
         case .connection: "network"
         case .feedAndSound: "video"
         case .popupTriggers: "bell.badge"
@@ -43,9 +46,20 @@ final class SettingsPaneSelection {
     }
 }
 
+private enum InsecureConnectionAction: Int, Identifiable {
+    case applyFrigate
+    case applyMqtt
+    case verifyMqtt
+
+    var id: Int { rawValue }
+}
+
 struct SettingsMenuView: View {
     @Bindable var monitor: FrigateMonitor
     @Bindable var paneSelection: SettingsPaneSelection
+    @Bindable var updateChecker: UpdateChecker
+    let onDockIconPreferenceChanged: (Bool) -> Void
+    @AppStorage("showDockIcon") private var showsDockIcon = true
     @State private var serverAddressDraft = ""
     @State private var usernameDraft = ""
     @State private var passwordDraft = ""
@@ -58,6 +72,9 @@ struct SettingsMenuView: View {
     @State private var classificationDraft = ""
     @State private var isClassificationPickerPresented = false
     @State private var classificationPickerSelections = Set<String>()
+    @State private var insecureConnectionAction: InsecureConnectionAction?
+    @State private var isDataResetConfirmationPresented = false
+    @State private var dataResetError: String?
     var body: some View {
         VStack(spacing: 0) {
             settings
@@ -74,12 +91,39 @@ struct SettingsMenuView: View {
             mqttTopicPrefixDraft = monitor.mqttTopicPrefix
             monitor.refreshAvailableClassifications()
         }
+        .onChange(of: showsDockIcon) { _, newValue in
+            onDockIconPreferenceChanged(newValue)
+        }
+        .alert(item: $insecureConnectionAction, content: insecureConnectionAlert)
+        .confirmationDialog(
+            "Delete All TixisBirdview Data?",
+            isPresented: $isDataResetConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Data and Quit", role: .destructive, action: deleteAllStoredData)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes all preferences and TixisBirdview's Frigate and MQTT passwords from Keychain. This cannot be undone.")
+        }
+        .alert(
+            "Data Could Not Be Deleted",
+            isPresented: Binding(
+                get: { dataResetError != nil },
+                set: { if !$0 { dataResetError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(dataResetError ?? "Unknown error")
+        }
     }
 
     private var settings: some View {
         ScrollView {
             Group {
                 switch paneSelection.selected {
+                case .general:
+                    generalSettings
                 case .connection:
                     connectionSettings
                 case .feedAndSound:
@@ -91,6 +135,96 @@ struct SettingsMenuView: View {
             .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var generalSettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            settingsGroup(title: "Application", systemImage: "menubar.rectangle") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Show TixisBirdview in the Dock", isOn: $showsDockIcon)
+                    Text("The menu-bar icon remains available when the Dock icon is hidden.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            settingsGroup(title: "Software updates", systemImage: "arrow.triangle.2.circlepath") {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Installed version") {
+                        Text("\(AppVersionInfo.displayVersion) (\(AppVersionInfo.displayBuild))")
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+
+                    Toggle(
+                        "Automatically check for updates",
+                        isOn: $updateChecker.automaticallyChecksForUpdates
+                    )
+
+                    HStack(spacing: 8) {
+                        Button("Check Now") {
+                            updateChecker.checkNow()
+                        }
+                        .disabled(updateChecker.isChecking)
+
+                        if updateChecker.isChecking {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Checking for updates")
+                        }
+
+                        if updateChecker.availableRelease != nil {
+                            Button("View Release…") {
+                                updateChecker.openAvailableRelease()
+                            }
+                        }
+                    }
+
+                    updateStatus
+
+                    Text("Automatic checks contact GitHub at most once per day. TixisBirdview never downloads or installs an update without your action.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            settingsGroup(title: "App data", systemImage: "externaldrive.badge.xmark") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Remove all preferences and credentials stored by TixisBirdview on this Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button("Delete All App Data…", role: .destructive) {
+                        isDataResetConfirmationPresented = true
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        switch updateChecker.state {
+        case .idle:
+            Label(updateChecker.statusText, systemImage: "info.circle")
+                .foregroundStyle(.secondary)
+        case .checking:
+            EmptyView()
+        case .upToDate:
+            Label(updateChecker.statusText, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .updateAvailable:
+            Label(updateChecker.statusText, systemImage: "arrow.down.circle.fill")
+                .foregroundStyle(.blue)
+        case .noPublishedRelease:
+            Label(updateChecker.statusText, systemImage: "info.circle")
+                .foregroundStyle(.secondary)
+        case .failed:
+            Label(updateChecker.statusText, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        }
     }
 
     private var connectionSettings: some View {
@@ -116,6 +250,7 @@ struct SettingsMenuView: View {
                 HStack(spacing: 8) {
                     TextField("https://frigate.example.org:8971", text: $serverAddressDraft)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Frigate server")
                         .onSubmit {
                             applySettings()
                         }
@@ -130,6 +265,16 @@ struct SettingsMenuView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if FrigateMonitor.requiresInsecureTransportConfirmation(serverAddressDraft) {
+                    Label(
+                        "HTTP is not encrypted. Credentials, events, and camera images may be visible or modified on the network.",
+                        systemImage: "lock.open.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -227,13 +372,25 @@ struct SettingsMenuView: View {
                     HStack(spacing: 8) {
                         TextField("Broker host", text: $mqttBrokerHostDraft)
                             .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("MQTT broker host")
 
                         TextField("Port", value: $mqttBrokerPortDraft, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 72)
+                            .accessibilityLabel("MQTT broker port")
                     }
 
                     Toggle("Use TLS", isOn: $mqttUsesTLSDraft)
+
+                    if !mqttUsesTLSDraft {
+                        Label(
+                            "Without TLS, MQTT credentials and event data may be visible or modified on the network.",
+                            systemImage: "lock.open.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
 
                     Text("MQTT login (optional)")
                         .font(.caption)
@@ -251,6 +408,7 @@ struct SettingsMenuView: View {
 
                     TextField("e.g. frigate", text: $mqttTopicPrefixDraft)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("MQTT topic prefix")
 
                     Text("MQTT credentials are stored in your macOS Keychain, separately for each broker.")
                         .font(.caption2)
@@ -258,13 +416,11 @@ struct SettingsMenuView: View {
 
                     HStack {
                         Button("Apply MQTT") {
-                            applyMqttSettings()
+                            requestMqttApplication(verifyAfterApplying: false)
                         }
 
                         Button("Verify") {
-                            if applyMqttSettings() {
-                                monitor.verifyMqttConnection()
-                            }
+                            requestMqttApplication(verifyAfterApplying: true)
                         }
                         .disabled(monitor.isMqttVerificationInProgress)
 
@@ -400,6 +556,8 @@ struct SettingsMenuView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Refresh classifications")
+                    .help("Refresh classifications from Frigate")
                     .disabled(monitor.isLoadingClassifications)
                 }
 
@@ -462,11 +620,18 @@ struct SettingsMenuView: View {
         }
     }
 
-    private func applySettings() {
+    private func applySettings(allowInsecureTransport: Bool = false) {
+        if !allowInsecureTransport,
+           FrigateMonitor.requiresInsecureTransportConfirmation(serverAddressDraft) {
+            insecureConnectionAction = .applyFrigate
+            return
+        }
+
         if monitor.applyConnectionSettings(
             serverAddressDraft,
             username: usernameDraft,
-            password: passwordDraft
+            password: passwordDraft,
+            allowInsecureTransport: allowInsecureTransport
         ) {
             serverAddressDraft = monitor.serverAddress
             usernameDraft = monitor.username
@@ -476,14 +641,15 @@ struct SettingsMenuView: View {
     }
 
     @discardableResult
-    private func applyMqttSettings() -> Bool {
+    private func applyMqttSettings(allowInsecureTransport: Bool) -> Bool {
         let didApply = monitor.applyMqttSettings(
             host: mqttBrokerHostDraft,
             port: mqttBrokerPortDraft,
             useTLS: mqttUsesTLSDraft,
             username: mqttUsernameDraft,
             password: mqttPasswordDraft,
-            topicPrefix: mqttTopicPrefixDraft
+            topicPrefix: mqttTopicPrefixDraft,
+            allowInsecureTransport: allowInsecureTransport
         )
 
         guard didApply else {
@@ -499,6 +665,47 @@ struct SettingsMenuView: View {
         return true
     }
 
+    private func requestMqttApplication(
+        verifyAfterApplying: Bool,
+        allowInsecureTransport: Bool = false
+    ) {
+        if !mqttUsesTLSDraft, !allowInsecureTransport {
+            insecureConnectionAction = verifyAfterApplying ? .verifyMqtt : .applyMqtt
+            return
+        }
+
+        if applyMqttSettings(allowInsecureTransport: allowInsecureTransport),
+           verifyAfterApplying {
+            monitor.verifyMqttConnection()
+        }
+    }
+
+    private func insecureConnectionAlert(for action: InsecureConnectionAction) -> Alert {
+        switch action {
+        case .applyFrigate:
+            Alert(
+                title: Text("Use Unsecured HTTP?"),
+                message: Text("This Frigate connection is not encrypted. Continue only on a network you trust."),
+                primaryButton: .destructive(Text("Use HTTP")) {
+                    applySettings(allowInsecureTransport: true)
+                },
+                secondaryButton: .cancel()
+            )
+        case .applyMqtt, .verifyMqtt:
+            Alert(
+                title: Text("Connect Without TLS?"),
+                message: Text("This MQTT connection is not encrypted. Continue only on a network you trust."),
+                primaryButton: .destructive(Text("Continue Without TLS")) {
+                    requestMqttApplication(
+                        verifyAfterApplying: action == .verifyMqtt,
+                        allowInsecureTransport: true
+                    )
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
     private func addClassification() {
         let classification = classificationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !classification.isEmpty else {
@@ -507,6 +714,15 @@ struct SettingsMenuView: View {
 
         monitor.setClassification(classification, isSelected: true)
         classificationDraft = ""
+    }
+
+    private func deleteAllStoredData() {
+        do {
+            try monitor.deleteAllStoredData()
+            NSApp.terminate(nil)
+        } catch {
+            dataResetError = error.localizedDescription
+        }
     }
 
     private var classificationPicker: some View {
@@ -544,7 +760,7 @@ struct SettingsMenuView: View {
 
                 Spacer()
 
-                Button("Add selected (\(classificationPickerSelections.count))") {
+                Button("Add Selected (\(classificationPickerSelections.count))") {
                     for classification in classificationPickerSelections {
                         monitor.setClassification(classification, isSelected: true)
                     }
@@ -587,6 +803,8 @@ private extension FrigateMonitor.ConnectionState {
 #Preview {
     SettingsMenuView(
         monitor: FrigateMonitor(),
-        paneSelection: SettingsPaneSelection(selected: .connection)
+        paneSelection: SettingsPaneSelection(selected: .general),
+        updateChecker: UpdateChecker(),
+        onDockIconPreferenceChanged: { _ in }
     )
 }

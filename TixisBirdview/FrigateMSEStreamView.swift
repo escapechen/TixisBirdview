@@ -92,10 +92,13 @@ struct FrigateMSEStreamView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.evaluateJavaScript(Self.teardownJavaScript) { _, _ in
-            webView.stopLoading()
-            webView.loadHTMLString("", baseURL: nil)
-        }
+        // Stop the socket and MediaSource in the existing page, but do not
+        // navigate to a replacement document while SwiftUI is destroying the
+        // view. That teardown race makes WebKit request process assertions
+        // after its helper process has already exited.
+        webView.evaluateJavaScript(Self.teardownJavaScript, completionHandler: nil)
+        webView.stopLoading()
+        webView.navigationDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "frigateMSE")
     }
 

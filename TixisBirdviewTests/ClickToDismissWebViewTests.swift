@@ -239,7 +239,7 @@ final class LiveStreamRoutingTests: XCTestCase {
         configuration.protocolClasses = [FrameRequestURLProtocol.self]
         let monitor = FrigateMonitor(
             urlSession: URLSession(configuration: configuration),
-            passwordProvider: { _ in "test-password" }
+            passwordProvider: { _, _ in "test-password" }
         )
         monitor.serverAddress = "https://frigate.example:8971"
         monitor.username = "test-user"
@@ -330,7 +330,7 @@ final class JpegFeedAuthenticationTests: XCTestCase {
         configuration.protocolClasses = [FrameRequestURLProtocol.self]
         let monitor = FrigateMonitor(
             urlSession: URLSession(configuration: configuration),
-            passwordProvider: { _ in "test-password" }
+            passwordProvider: { _, _ in "test-password" }
         )
         monitor.serverAddress = "https://frigate.example:8971"
         monitor.username = "test-user"
@@ -339,6 +339,159 @@ final class JpegFeedAuthenticationTests: XCTestCase {
 
         XCTAssertEqual(imageData, Data([0xFF, 0xD8, 0xFF, 0xD9]))
         XCTAssertEqual(recorder.requests.map { $0.url?.path }, ["/api/login", "/api/birdseye/latest.jpg"])
+    }
+}
+
+@MainActor
+final class ConnectionSecurityTests: XCTestCase {
+    func testAddressWithoutSchemeDefaultsToHTTPS() throws {
+        XCTAssertEqual(
+            try FrigateMonitor.validatedServerAddress("frigate.example:8971"),
+            "https://frigate.example:8971"
+        )
+    }
+
+    func testChangingServerCannotReuseAnotherServersPassword() {
+        let oldServer = "https://old-frigate.example:8971"
+        let newServer = "https://new-frigate.example:8971"
+        var requestedServer: String?
+        var requestedUsername: String?
+        let monitor = FrigateMonitor(passwordProvider: { serverAddress, username in
+            requestedServer = serverAddress
+            requestedUsername = username
+            return serverAddress == oldServer ? "old-server-password" : nil
+        })
+        monitor.serverAddress = oldServer
+        monitor.username = "birdy"
+
+        let didApply = monitor.applyConnectionSettings(
+            newServer,
+            username: "birdy",
+            password: ""
+        )
+
+        XCTAssertFalse(didApply)
+        XCTAssertEqual(requestedServer, newServer)
+        XCTAssertEqual(requestedUsername, "birdy")
+        XCTAssertEqual(monitor.serverAddress, oldServer)
+    }
+
+    func testKeychainServiceIsScopedByServerOrigin() {
+        XCTAssertNotEqual(
+            FrigateMonitor.keychainServiceName(for: "https://first.example:8971"),
+            FrigateMonitor.keychainServiceName(for: "https://second.example:8971")
+        )
+    }
+
+    func testExplicitHTTPRequiresConfirmation() {
+        let monitor = FrigateMonitor(passwordProvider: { _, _ in nil })
+
+        XCTAssertFalse(monitor.applyConnectionSettings(
+            "http://frigate.example:5000",
+            username: "",
+            password: ""
+        ))
+        XCTAssertTrue(monitor.serverAddressError?.contains("not encrypted") == true)
+
+        XCTAssertTrue(monitor.applyConnectionSettings(
+            "http://frigate.example:5000",
+            username: "",
+            password: "",
+            allowInsecureTransport: true
+        ))
+
+        XCTAssertTrue(monitor.applyConnectionSettings(
+            "https://frigate.invalid",
+            username: "",
+            password: ""
+        ))
+    }
+
+    func testMqttWithoutTLSRequiresConfirmation() {
+        let monitor = FrigateMonitor(passwordProvider: { _, _ in nil })
+
+        XCTAssertFalse(monitor.applyMqttSettings(
+            host: "mqtt.example",
+            port: 1883,
+            useTLS: false,
+            username: "",
+            password: "",
+            topicPrefix: "frigate"
+        ))
+        XCTAssertTrue(monitor.mqttVerificationStatus?.contains("not encrypted") == true)
+
+        XCTAssertTrue(monitor.applyMqttSettings(
+            host: "mqtt.example",
+            port: 1883,
+            useTLS: false,
+            username: "",
+            password: "",
+            topicPrefix: "frigate",
+            allowInsecureTransport: true
+        ))
+
+        XCTAssertTrue(monitor.applyMqttSettings(
+            host: "mqtt.example",
+            port: 8883,
+            useTLS: true,
+            username: "",
+            password: "",
+            topicPrefix: "frigate"
+        ))
+    }
+
+    func testRedirectPolicyAllowsOnlySameOrigin() throws {
+        let source = try XCTUnwrap(URL(string: "https://frigate.example:8971/api/login"))
+
+        XCTAssertTrue(SecureRedirectPolicy.allowsRedirect(
+            from: source,
+            to: try XCTUnwrap(URL(string: "https://frigate.example:8971/api/login/"))
+        ))
+        XCTAssertFalse(SecureRedirectPolicy.allowsRedirect(
+            from: source,
+            to: try XCTUnwrap(URL(string: "https://other.example:8971/api/login"))
+        ))
+        XCTAssertFalse(SecureRedirectPolicy.allowsRedirect(
+            from: source,
+            to: try XCTUnwrap(URL(string: "http://frigate.example:8971/api/login"))
+        ))
+    }
+
+    func testLoginRedirectDelegateRejectsCrossOrigin307And308() throws {
+        let source = try XCTUnwrap(URL(string: "https://frigate.example:8971/api/login"))
+        let destination = try XCTUnwrap(URL(string: "https://other.example:8971/capture"))
+        let task = URLSession.shared.dataTask(with: source)
+        defer { task.cancel() }
+        let delegate = SecureURLSessionDelegate()
+
+        for statusCode in [307, 308] {
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: source,
+                statusCode: statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Location": destination.absoluteString]
+            ))
+            var redirectedRequest: URLRequest?
+
+            delegate.urlSession(
+                .shared,
+                task: task,
+                willPerformHTTPRedirection: response,
+                newRequest: URLRequest(url: destination)
+            ) { redirectedRequest = $0 }
+
+            XCTAssertNil(redirectedRequest)
+        }
+    }
+
+    func testAppDeclaresLocalNetworkPurpose() {
+        let purpose = Bundle(for: AppDelegate.self)
+            .object(forInfoDictionaryKey: "NSLocalNetworkUsageDescription") as? String
+
+        XCTAssertEqual(
+            purpose,
+            "TixisBirdview connects to the Frigate server and optional MQTT broker you configure on your local network."
+        )
     }
 }
 
@@ -601,20 +754,59 @@ final class HIGInteractionTests: XCTestCase {
     func testApplicationMenuOffersStandardSettingsAndVisibilityCommands() throws {
         let delegate = AppDelegate()
         let monitor = FrigateMonitor()
+        let updateChecker = UpdateChecker(releaseLoader: { nil })
         delegate.configureMainMenu(
-            settingsWindowController: SettingsWindowController(monitor: monitor),
-            aboutWindowController: AboutWindowController()
+            settingsWindowController: SettingsWindowController(
+                monitor: monitor,
+                updateChecker: updateChecker
+            ),
+            aboutWindowController: AboutWindowController(),
+            updateChecker: updateChecker
         )
 
         let appMenu = try XCTUnwrap(NSApp.mainMenu?.item(at: 0)?.submenu)
         let titles = appMenu.items.map(\.title)
 
         XCTAssertTrue(titles.contains("About TixisBirdview"))
-        XCTAssertTrue(titles.contains("Settings..."))
+        XCTAssertTrue(titles.contains("Settings…"))
+        XCTAssertTrue(titles.contains("Check for Updates…"))
+        XCTAssertTrue(titles.contains("Services"))
         XCTAssertTrue(titles.contains("Hide TixisBirdview"))
         XCTAssertTrue(titles.contains("Hide Others"))
         XCTAssertTrue(titles.contains("Show All"))
         XCTAssertTrue(titles.contains("Quit TixisBirdview"))
+    }
+
+    func testDockMenuProvidesStatusAndOperationalCommands() throws {
+        let monitor = FrigateMonitor()
+        let updateChecker = UpdateChecker(releaseLoader: { nil })
+        let controller = StatusItemController(
+            monitor: monitor,
+            updateChecker: updateChecker,
+            onOpenSettings: {},
+            onOpenAbout: {},
+            onDockIconPreferenceChanged: { _ in },
+            installsStatusItem: false
+        )
+
+        let dockMenu = controller.makeDockMenu()
+        let titles = dockMenu.items.map(\.title)
+
+        XCTAssertTrue(titles.contains(where: { $0.hasPrefix("Status: ") }))
+        XCTAssertTrue(titles.contains(where: { $0.hasPrefix("Last: ") }))
+        XCTAssertTrue(titles.contains(monitor.isMonitoring ? "Pause Monitoring" : "Start Monitoring"))
+        XCTAssertTrue(titles.contains("Show Feed"))
+        XCTAssertTrue(titles.contains("Keep Feed Open"))
+        XCTAssertTrue(titles.contains("Settings…"))
+        XCTAssertTrue(titles.contains("Check for Updates…"))
+        XCTAssertTrue(titles.contains("About TixisBirdview"))
+        XCTAssertFalse(titles.contains("Show Dock Icon"))
+        XCTAssertFalse(titles.contains("Quit TixisBirdview"))
+
+        let durationMenu = try XCTUnwrap(
+            dockMenu.items.first(where: { $0.title == "Keep Feed Open" })?.submenu
+        )
+        XCTAssertEqual(durationMenu.items.count, 6)
     }
 
     func testVisibleCloseControlDismissesWithoutTakingFocus() {
@@ -630,10 +822,12 @@ final class HIGInteractionTests: XCTestCase {
     }
 
     func testSettingsPanesHaveStableNativeToolbarMetadata() {
-        XCTAssertEqual(SettingsPane.allCases.map(\.rawValue), ["connection", "feedAndSound", "popupTriggers"])
+        XCTAssertEqual(SettingsPane.allCases.map(\.rawValue), ["general", "connection", "feedAndSound", "popupTriggers"])
+        XCTAssertEqual(SettingsPane.general.title, "General")
         XCTAssertEqual(SettingsPane.connection.title, "Connection")
         XCTAssertEqual(SettingsPane.feedAndSound.title, "Feed & Sound")
         XCTAssertEqual(SettingsPane.popupTriggers.title, "Popup Triggers")
+        XCTAssertEqual(SettingsPane.general.systemImage, "gearshape")
         XCTAssertEqual(SettingsPane.connection.systemImage, "network")
     }
 
@@ -643,5 +837,205 @@ final class HIGInteractionTests: XCTestCase {
         selection.selected = .popupTriggers
 
         XCTAssertEqual(selection.selected, .popupTriggers)
+    }
+}
+
+@MainActor
+final class UpdateCheckerTests: XCTestCase {
+    func testSemanticVersionComparisonHandlesVPrefixAndMissingPatchComponent() {
+        XCTAssertTrue(AppUpdatePolicy.isNewer(remoteVersion: "v1.2.0", than: "1.1"))
+        XCTAssertFalse(AppUpdatePolicy.isNewer(remoteVersion: "v1.1.0", than: "1.1"))
+        XCTAssertFalse(AppUpdatePolicy.isNewer(remoteVersion: "not-a-version", than: "1.1"))
+    }
+
+    func testAutomaticChecksRunAtMostOncePerDay() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+
+        XCTAssertTrue(AppUpdatePolicy.shouldCheckAutomatically(lastCheck: nil, now: now))
+        XCTAssertFalse(
+            AppUpdatePolicy.shouldCheckAutomatically(
+                lastCheck: now.addingTimeInterval(-60 * 60),
+                now: now
+            )
+        )
+        XCTAssertTrue(
+            AppUpdatePolicy.shouldCheckAutomatically(
+                lastCheck: now.addingTimeInterval(-25 * 60 * 60),
+                now: now
+            )
+        )
+    }
+
+    func testNewerPublishedReleaseBecomesAvailableWithoutDownloadingIt() async throws {
+        let expectedRelease = PublishedAppRelease(
+            version: "1.2.0",
+            pageURL: try XCTUnwrap(URL(string: "https://github.com/escapechen/TixisBirdview/releases/tag/v1.2.0"))
+        )
+        let checker = UpdateChecker(
+            currentVersion: "1.1",
+            releaseLoader: { expectedRelease }
+        )
+
+        await checker.refresh(recordAutomaticCheck: false)
+
+        XCTAssertEqual(checker.state, .updateAvailable(expectedRelease))
+        XCTAssertEqual(checker.availableRelease, expectedRelease)
+        XCTAssertEqual(checker.menuItemTitle, "Update to 1.2.0…")
+    }
+
+    func testAutomaticUpdateNotificationAppearsOnlyOncePerVersion() async throws {
+        let suiteName = "UpdateCheckerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let release = PublishedAppRelease(
+            version: "1.2.0",
+            pageURL: try XCTUnwrap(URL(string: "https://github.com/escapechen/TixisBirdview/releases/tag/v1.2.0"))
+        )
+        let checker = UpdateChecker(
+            defaults: defaults,
+            currentVersion: "1.1",
+            releaseLoader: { release }
+        )
+        var notifications = 0
+        checker.onUpdateAvailable = { _ in notifications += 1 }
+
+        await checker.refresh(recordAutomaticCheck: true)
+        await checker.refresh(recordAutomaticCheck: true)
+
+        XCTAssertEqual(notifications, 1)
+    }
+
+    func testMissingGitHubReleaseIsAValidEmptyState() async {
+        let checker = UpdateChecker(
+            currentVersion: "1.1",
+            releaseLoader: { nil }
+        )
+
+        await checker.refresh(recordAutomaticCheck: false)
+
+        XCTAssertEqual(checker.state, .noPublishedRelease)
+        XCTAssertEqual(checker.statusText, "No published release is available yet.")
+    }
+
+    func testAboutBuildUsesTheSignedBundleBuildNumberOnly() {
+        XCTAssertEqual(AppVersionInfo.displayBuild, AppVersionInfo.bundleBuildNumber)
+    }
+}
+
+@MainActor
+final class ApplicationActivationControllerTests: XCTestCase {
+    func testAccessoryPolicyReturnsOnlyAfterLastUtilityWindowCloses() throws {
+        let suiteName = "ApplicationActivationControllerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(false, forKey: ApplicationActivationController.dockIconPreferenceKey)
+        var policies: [NSApplication.ActivationPolicy] = []
+
+        let controller = ApplicationActivationController(
+            userDefaults: defaults,
+            setActivationPolicy: { policies.append($0) },
+            activateApplication: {}
+        )
+
+        controller.applyCurrentPolicy()
+        controller.updateUtilityWindow("settings", isVisible: true)
+        controller.updateUtilityWindow("about", isVisible: true)
+        controller.updateUtilityWindow("settings", isVisible: false)
+        controller.updateUtilityWindow("about", isVisible: false)
+
+        XCTAssertEqual(policies, [.accessory, .regular, .regular, .regular, .accessory])
+    }
+
+    func testDockIconKeepsRegularPolicyAfterUtilityWindowCloses() throws {
+        let suiteName = "ApplicationActivationControllerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: ApplicationActivationController.dockIconPreferenceKey)
+
+        let controller = ApplicationActivationController(
+            userDefaults: defaults,
+            setActivationPolicy: { _ in },
+            activateApplication: {}
+        )
+
+        controller.updateUtilityWindow("settings", isVisible: true)
+        controller.updateUtilityWindow("settings", isVisible: false)
+
+        XCTAssertEqual(controller.desiredPolicy, .regular)
+    }
+}
+
+final class RecentIdentifierCacheTests: XCTestCase {
+    func testDuplicateIdentifierIsRejected() {
+        var cache = RecentIdentifierCache(capacity: 3)
+
+        XCTAssertTrue(cache.insert("one"))
+        XCTAssertFalse(cache.insert("one"))
+        XCTAssertEqual(cache.count, 1)
+    }
+
+    func testOldestIdentifierIsEvictedAtCapacity() {
+        var cache = RecentIdentifierCache(capacity: 3)
+
+        cache.insert("one")
+        cache.insert("two")
+        cache.insert("three")
+        cache.insert("four")
+
+        XCTAssertEqual(cache.count, 3)
+        XCTAssertFalse(cache.contains("one"))
+        XCTAssertTrue(cache.contains("two"))
+        XCTAssertTrue(cache.contains("three"))
+        XCTAssertTrue(cache.contains("four"))
+    }
+}
+
+final class StoredDataResetTests: XCTestCase {
+    func testOnlyTixisBirdviewKeychainServicesAreOwned() {
+        XCTAssertTrue(FrigateMonitor.isOwnedKeychainService("org.tixisbirdview.app.frigate"))
+        XCTAssertTrue(FrigateMonitor.isOwnedKeychainService("org.tixisbirdview.app.frigate.https://example.test"))
+        XCTAssertTrue(FrigateMonitor.isOwnedKeychainService("org.tixisbirdview.app.mqtt.broker.example.test"))
+        XCTAssertFalse(FrigateMonitor.isOwnedKeychainService("org.tixisbirdview.app.frigate-lookalike"))
+        XCTAssertFalse(FrigateMonitor.isOwnedKeychainService("org.example.password"))
+    }
+}
+
+final class LiveStreamMappingRefreshTests: XCTestCase {
+    func testMissingCameraMappingRetriesAfterThirtySeconds() {
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertFalse(FrigateMonitor.shouldRefreshLiveStreamMapping(
+            for: "new_camera",
+            streamNames: ["known_camera": "known_stream"],
+            loadedAt: now.addingTimeInterval(-10),
+            lastAttemptAt: now.addingTimeInterval(-29),
+            now: now
+        ))
+        XCTAssertTrue(FrigateMonitor.shouldRefreshLiveStreamMapping(
+            for: "new_camera",
+            streamNames: ["known_camera": "known_stream"],
+            loadedAt: now.addingTimeInterval(-10),
+            lastAttemptAt: now.addingTimeInterval(-30),
+            now: now
+        ))
+    }
+
+    func testKnownMappingRefreshesAfterFiveMinutes() {
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(FrigateMonitor.shouldRefreshLiveStreamMapping(
+            for: "camera",
+            streamNames: ["camera": "stream"],
+            loadedAt: now.addingTimeInterval(-300),
+            lastAttemptAt: now.addingTimeInterval(-300),
+            now: now
+        ))
+        XCTAssertFalse(FrigateMonitor.shouldRefreshLiveStreamMapping(
+            for: "camera",
+            streamNames: ["camera": "stream"],
+            loadedAt: now.addingTimeInterval(-330),
+            lastAttemptAt: now.addingTimeInterval(-10),
+            now: now
+        ))
     }
 }

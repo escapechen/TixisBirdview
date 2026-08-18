@@ -9,41 +9,59 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController: NSObject, NSToolbarDelegate {
+final class SettingsWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate {
     private static let selectedPaneKey = "TixisBirdviewSelectedSettingsPane"
     private static let toolbarIdentifier = NSToolbar.Identifier("TixisBirdviewSettingsToolbar")
 
     private let monitor: FrigateMonitor
+    private let updateChecker: UpdateChecker
+    private let onDockIconPreferenceChanged: (Bool) -> Void
+    private let onWindowVisibilityChanged: (Bool) -> Void
     private let paneSelection: SettingsPaneSelection
     private var window: NSWindow?
     private var toolbar: NSToolbar?
 
-    init(monitor: FrigateMonitor) {
+    init(
+        monitor: FrigateMonitor,
+        updateChecker: UpdateChecker,
+        onDockIconPreferenceChanged: @escaping (Bool) -> Void = { _ in },
+        onWindowVisibilityChanged: @escaping (Bool) -> Void = { _ in }
+    ) {
         self.monitor = monitor
+        self.updateChecker = updateChecker
+        self.onDockIconPreferenceChanged = onDockIconPreferenceChanged
+        self.onWindowVisibilityChanged = onWindowVisibilityChanged
         let savedPane = UserDefaults.standard.string(forKey: Self.selectedPaneKey)
-            .flatMap(SettingsPane.init(rawValue:)) ?? .connection
+            .flatMap(SettingsPane.init(rawValue:)) ?? .general
         paneSelection = SettingsPaneSelection(selected: savedPane)
         super.init()
     }
 
     func show() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-
         if let window {
+            if !window.isVisible {
+                onWindowVisibilityChanged(true)
+            }
+            NSApp.activate(ignoringOtherApps: true)
             updateWindowTitle()
             window.makeKeyAndOrderFront(nil)
             return
         }
 
         let hostingController = NSHostingController(
-            rootView: SettingsMenuView(monitor: monitor, paneSelection: paneSelection)
+            rootView: SettingsMenuView(
+                monitor: monitor,
+                paneSelection: paneSelection,
+                updateChecker: updateChecker,
+                onDockIconPreferenceChanged: onDockIconPreferenceChanged
+            )
                 .frame(width: 560, height: 620)
         )
 
         let window = NSWindow(contentViewController: hostingController)
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
         window.toolbarStyle = .preference
 
@@ -57,8 +75,14 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
 
         self.window = window
         self.toolbar = toolbar
+        onWindowVisibilityChanged(true)
+        NSApp.activate(ignoringOtherApps: true)
         updateWindowTitle()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onWindowVisibilityChanged(false)
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -104,7 +128,7 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
     }
 
     private func updateWindowTitle() {
-        window?.title = "TixisBirdview Settings — \(paneSelection.selected.title)"
+        window?.title = paneSelection.selected.title
     }
 }
 

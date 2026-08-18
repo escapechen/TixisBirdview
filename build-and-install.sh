@@ -69,6 +69,9 @@ if [[ ! -d "$PROJECT_PATH" ]]; then
 fi
 
 run_tests() {
+    "$SCRIPT_DIR/scripts/check-public-safety.sh"
+    "$SCRIPT_DIR/scripts/check-versioning.sh"
+    "$SCRIPT_DIR/scripts/test-release-tooling.sh"
     echo "Testing $SCHEME..."
     "$DEVELOPER_DIR/usr/bin/xcodebuild" \
         -project "$PROJECT_PATH" \
@@ -121,11 +124,12 @@ EOF
 fi
 
 echo "Building $SCHEME ($CONFIGURATION)..."
-echo "Using Apple Development team from $TEAM_ID_SOURCE: $RESOLVED_TEAM_ID"
+echo "Using the Apple Development team from $TEAM_ID_SOURCE (ID redacted)."
 "$DEVELOPER_DIR/usr/bin/xcodebuild" \
     -project "$PROJECT_PATH" \
     -scheme "$SCHEME" \
     -configuration "$CONFIGURATION" \
+    -destination "generic/platform=macOS" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     CODE_SIGN_STYLE=Automatic \
     DEVELOPMENT_TEAM="$RESOLVED_TEAM_ID" \
@@ -134,6 +138,18 @@ echo "Using Apple Development team from $TEAM_ID_SOURCE: $RESOLVED_TEAM_ID"
 if [[ ! -d "$BUILT_APP" ]]; then
     echo "Build succeeded but the app bundle was not found: $BUILT_APP" >&2
     exit 1
+fi
+
+if [[ "$CONFIGURATION" == "Release" ]]; then
+    BUILT_ARCHITECTURES="$(/usr/bin/lipo -archs "$BUILT_APP/Contents/MacOS/$SCHEME")"
+    for REQUIRED_ARCHITECTURE in arm64 x86_64; do
+        if [[ " $BUILT_ARCHITECTURES " != *" $REQUIRED_ARCHITECTURE "* ]]; then
+            echo "Release build is missing required architecture: $REQUIRED_ARCHITECTURE" >&2
+            echo "Built architectures: $BUILT_ARCHITECTURES" >&2
+            exit 1
+        fi
+    done
+    echo "Universal Release architectures: $BUILT_ARCHITECTURES"
 fi
 
 echo "Installing $INSTALLED_APP (sudo may prompt)..."
