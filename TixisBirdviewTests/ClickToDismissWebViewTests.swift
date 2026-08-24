@@ -134,12 +134,13 @@ final class FeedCameraSelectionTests: XCTestCase {
             """.utf8)
         )
 
-        XCTAssertEqual(review.data.objectNames, ["cat-verified", "Tixi"])
-        XCTAssertEqual(review.data.bestObjectDescription, "Cat-Verified, Tixi")
+        XCTAssertEqual(review.data.objectNames, ["cat", "Tixi"])
+        XCTAssertEqual(review.data.bestObjectDescription, "Cat, Tixi")
     }
 
     func testCurrentFeedCameraPrefersNewerReviewActivity() throws {
         let monitor = FrigateMonitor()
+        monitor.feedSource = .latestActivityCamera
         monitor.latestEvent = FrigateEvent(
             id: "older-event",
             camera: "FLUR_CAM",
@@ -164,6 +165,26 @@ final class FeedCameraSelectionTests: XCTestCase {
         )
 
         XCTAssertEqual(monitor.currentFeedCameraName, "WZ_CAM")
+    }
+
+    func testBirdseyeFeedSourceUsesTheServerComposite() {
+        let monitor = FrigateMonitor()
+        monitor.latestEvent = FrigateEvent(
+            id: "latest-event",
+            camera: "FLUR_CAM",
+            label: "person",
+            subLabel: nil,
+            startTime: 200,
+            endTime: nil,
+            topScore: nil
+        )
+        monitor.feedSource = .frigateBirdseye
+        monitor.applyLiveStreamNames(["birdseye": "birdseye"])
+
+        XCTAssertEqual(monitor.currentFeedCameraName, "birdseye")
+        XCTAssertEqual(monitor.currentFeedStreamName, "birdseye")
+        XCTAssertEqual(monitor.feedURL.path, "/api/birdseye/latest.jpg")
+        XCTAssertEqual(monitor.liveStreamRoutingStatus, .ready)
     }
 }
 
@@ -222,7 +243,7 @@ final class LiveStreamRoutingTests: XCTestCase {
                         headerFields: ["Content-Type": "application/json"]
                     )!,
                     Data("""
-                    {"cameras":{"birdseye":{"live":{"streams":{"main":"go2rtc_birdseye"}}}}}
+                    {"birdseye":{"enabled":true,"restream":true},"cameras":{"front_door":{"live":{"streams":{"main":"front_door_main"}}}}}
                     """.utf8)
                 )
             default:
@@ -243,10 +264,11 @@ final class LiveStreamRoutingTests: XCTestCase {
         )
         monitor.serverAddress = "https://frigate.example:8971"
         monitor.username = "test-user"
+        monitor.feedSource = .frigateBirdseye
 
         await monitor.ensureLiveStreamNamesLoaded()
 
-        XCTAssertEqual(monitor.currentFeedStreamName, "go2rtc_birdseye")
+        XCTAssertEqual(monitor.currentFeedStreamName, "birdseye")
         XCTAssertEqual(monitor.liveStreamRoutingStatus, .ready)
         XCTAssertEqual(recorder.requests.map { $0.url?.path }, ["/api/login", "/api/config"])
     }
@@ -581,16 +603,10 @@ final class MqttProtocolContractTests: XCTestCase {
 @MainActor
 final class MqttEventToOverlayTests: XCTestCase {
     func testRecentMqttEventPresentsTheMatchingCameraOverlay() {
-        let monitor = FrigateMonitor()
-        monitor.isMonitoring = true
-        monitor.eventDeliveryMode = .mqtt
-        monitor.mqttTopicPrefix = "frigate"
-        monitor.popupTrigger = .anyObject
-        monitor.isPopupCooldownEnabled = false
-        monitor.isSoundAlertEnabled = false
+        let monitor = makeMonitor()
 
         let payload = Data("""
-        {"after":{"id":"event-123","camera":"kitchen_cam","label":"person","sub_label":"Tixi","start_time":\(Date().timeIntervalSince1970),"end_time":null,"top_score":0.95}}
+        {"after":{"id":"event-123","camera":"kitchen_cam","label":"person","sub_label":["Tixi",0.98],"start_time":\(Date().timeIntervalSince1970),"end_time":null,"top_score":0.95}}
         """.utf8)
 
         monitor.receiveMqttMessage(topic: "frigate/events", payload: payload)
@@ -603,17 +619,241 @@ final class MqttEventToOverlayTests: XCTestCase {
         monitor.dismissOverlay()
     }
 
+    func testHttpStringSubLabelRemainsSupported() throws {
+        let payload = Data("""
+        {"id":"event-http","camera":"kitchen_cam","label":"cat","sub_label":"Bruno","start_time":\(Date().timeIntervalSince1970),"end_time":null,"top_score":0.95}
+        """.utf8)
+
+        let event = try JSONDecoder().decode(FrigateEvent.self, from: payload)
+
+        XCTAssertEqual(event.subLabel, "Bruno")
+        XCTAssertEqual(event.classificationNames, ["Bruno"])
+    }
+
+    func testLateEventSubLabelsAccumulateOnceDuringVisibleSession() throws {
+        let monitor = makeMonitor()
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-1", subLabel: nil, startedAt: startedAt)
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.title, "Cat")
+        let presentationID = monitor.overlayPresentationID
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-1", subLabel: "Tixi", startedAt: startedAt)
+        )
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-1", subLabel: "Tixi", startedAt: startedAt)
+        )
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-2", subLabel: "Bruno", startedAt: startedAt + 1)
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.title, "Cat, Tixi, Bruno")
+        XCTAssertEqual(monitor.overlayPresentationID, presentationID)
+        XCTAssertTrue(monitor.shouldShowOverlay)
+    }
+
+    func testDifferentCameraRefreshesVisiblePopupWithoutReopeningIt() throws {
+        let monitor = makeMonitor()
+        monitor.feedSource = .latestActivityCamera
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(
+                id: "garden-event",
+                camera: "garden_cam",
+                subLabel: "Tixi",
+                startedAt: startedAt
+            )
+        )
+        let presentationID = monitor.overlayPresentationID
+        let firstDismissalDate = try XCTUnwrap(monitor.overlayDismissalDate)
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(
+                id: "kitchen-event",
+                camera: "kitchen_cam",
+                subLabel: "Bruno",
+                startedAt: startedAt + 1
+            )
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.camera, "kitchen_cam")
+        XCTAssertEqual(monitor.overlayActivity?.title, "Bruno")
+        XCTAssertEqual(monitor.currentFeedCameraName, "kitchen_cam")
+        XCTAssertEqual(monitor.overlayPresentationID, presentationID)
+        XCTAssertGreaterThanOrEqual(
+            try XCTUnwrap(monitor.overlayDismissalDate),
+            firstDismissalDate
+        )
+    }
+
+    func testPopupCooldownPreventsAVisibleFeedFromSwitchingCameras() {
+        let monitor = makeMonitor()
+        monitor.feedSource = .latestActivityCamera
+        monitor.isPopupCooldownEnabled = true
+        monitor.popupCooldownSeconds = 60
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(
+                id: "garden-event",
+                camera: "garden_cam",
+                subLabel: "Tixi",
+                startedAt: startedAt
+            )
+        )
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(
+                id: "kitchen-event",
+                camera: "kitchen_cam",
+                subLabel: "Bruno",
+                startedAt: startedAt + 1
+            )
+        )
+
+        XCTAssertEqual(monitor.latestEvent?.camera, "kitchen_cam")
+        XCTAssertEqual(monitor.overlayActivity?.camera, "garden_cam")
+        XCTAssertEqual(monitor.currentFeedCameraName, "garden_cam")
+    }
+
+    func testBirdseyeSourceRemainsStableAcrossDifferentCameraEvents() {
+        let monitor = makeMonitor()
+        monitor.feedSource = .frigateBirdseye
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(
+                id: "garden-event",
+                camera: "garden_cam",
+                subLabel: "Tixi",
+                startedAt: startedAt
+            )
+        )
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(
+                id: "kitchen-event",
+                camera: "kitchen_cam",
+                subLabel: "Bruno",
+                startedAt: startedAt + 1
+            )
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.camera, "kitchen_cam")
+        XCTAssertEqual(monitor.currentFeedCameraName, "birdseye")
+    }
+
+    func testDismissedOverlayStartsANewClassificationSession() {
+        let monitor = makeMonitor()
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-1", subLabel: "Tixi", startedAt: startedAt)
+        )
+        monitor.dismissOverlay()
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-2", subLabel: "Bruno", startedAt: startedAt + 1)
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.title, "Bruno")
+        XCTAssertFalse(monitor.overlayActivity?.classificationNames.contains("Tixi") ?? true)
+    }
+
+    func testLateReviewSubLabelsAccumulateWithoutRepeatingNames() {
+        let monitor = makeMonitor()
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/reviews",
+            payload: reviewPayload(subLabels: [], startedAt: startedAt)
+        )
+        monitor.receiveMqttMessage(
+            topic: "frigate/reviews",
+            payload: reviewPayload(subLabels: ["Tixi", "Tixi", "Bruno"], startedAt: startedAt)
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.title, "Cat, Tixi, Bruno")
+    }
+
+    func testSelectedBaseLabelAcceptsVerifiedReviewWithLateSubLabel() {
+        let monitor = makeMonitor()
+        monitor.popupTrigger = .selectedClassifications
+        monitor.selectedClassificationNames = ["cat"]
+        let startedAt = Date().timeIntervalSince1970
+
+        monitor.receiveMqttMessage(
+            topic: "frigate/events",
+            payload: eventPayload(id: "cat-1", subLabel: nil, startedAt: startedAt)
+        )
+        monitor.receiveMqttMessage(
+            topic: "frigate/reviews",
+            payload: reviewPayload(
+                objects: ["cat-verified"],
+                subLabels: ["Bruno"],
+                startedAt: startedAt
+            )
+        )
+
+        XCTAssertEqual(monitor.overlayActivity?.title, "Cat, Bruno")
+    }
+
     func testWrongMqttTopicDoesNotPresentAnOverlay() {
-        let monitor = FrigateMonitor()
-        monitor.isMonitoring = true
-        monitor.eventDeliveryMode = .mqtt
-        monitor.mqttTopicPrefix = "frigate"
-        monitor.popupTrigger = .anyObject
+        let monitor = makeMonitor()
 
         monitor.receiveMqttMessage(topic: "other/events", payload: Data("{}".utf8))
 
         XCTAssertNil(monitor.latestEvent)
         XCTAssertFalse(monitor.shouldShowOverlay)
+    }
+
+    private func makeMonitor() -> FrigateMonitor {
+        let monitor = FrigateMonitor()
+        monitor.isMonitoring = true
+        monitor.eventDeliveryMode = .mqtt
+        monitor.mqttTopicPrefix = "frigate"
+        monitor.popupTrigger = .anyObject
+        monitor.isPopupCooldownEnabled = false
+        monitor.isSoundAlertEnabled = false
+        return monitor
+    }
+
+    private func eventPayload(
+        id: String,
+        camera: String = "garden_cam",
+        subLabel: String?,
+        startedAt: TimeInterval
+    ) -> Data {
+        let encodedSubLabel = subLabel.map { "[\"\($0)\",0.93]" } ?? "null"
+        return Data("""
+        {"after":{"id":"\(id)","camera":"\(camera)","label":"cat","sub_label":\(encodedSubLabel),"start_time":\(startedAt),"end_time":null,"top_score":0.91}}
+        """.utf8)
+    }
+
+    private func reviewPayload(
+        objects: [String] = ["cat"],
+        subLabels: [String],
+        startedAt: TimeInterval
+    ) -> Data {
+        let encodedObjects = objects.map { "\"\($0)\"" }.joined(separator: ",")
+        let encodedSubLabels = subLabels.map { "\"\($0)\"" }.joined(separator: ",")
+        return Data("""
+        {"after":{"id":"review-1","camera":"garden_cam","start_time":\(startedAt),"end_time":null,"severity":"alert","data":{"objects":[\(encodedObjects)],"sub_labels":[\(encodedSubLabels)]}}}
+        """.utf8)
     }
 }
 
@@ -628,6 +868,14 @@ final class FeedPlaybackStateTests: XCTestCase {
     func testLiveMSELatencyPolicyPrioritizesFreshFrames() {
         XCTAssertGreaterThanOrEqual(LiveStreamLatencyPolicy.retainedBufferedSeconds, 5)
         XCTAssertLessThan(LiveStreamLatencyPolicy.retainedBufferedSeconds, LiveStreamLatencyPolicy.maximumBufferedSeconds)
+        XCTAssertLessThan(
+            LiveStreamLatencyPolicy.targetLatencySeconds,
+            LiveStreamLatencyPolicy.liveEdgeResyncThresholdSeconds
+        )
+        XCTAssertLessThan(
+            LiveStreamLatencyPolicy.liveEdgeResyncThresholdSeconds,
+            LiveStreamLatencyPolicy.maximumBufferedGapBeforeRecoverySeconds
+        )
         XCTAssertGreaterThan(
             LiveStreamLatencyPolicy.maximumBufferedGapBeforeRecoverySeconds,
             LiveStreamLatencyPolicy.maximumBufferedSeconds
@@ -640,7 +888,28 @@ final class FeedPlaybackStateTests: XCTestCase {
         XCTAssertTrue(LiveStreamLatencyPolicy.shouldRecoverFromExcessiveLag(bufferedGap: 8.01))
     }
 
-    func testMSEPlayerHTMLUsesVideoOnlyWithoutPlayheadManipulation() throws {
+    func testLiveMSEOnlyResyncsAfterThresholdAndCooldown() {
+        XCTAssertFalse(
+            LiveStreamLatencyPolicy.shouldResyncWithLiveEdge(
+                bufferedGap: 3,
+                secondsSinceLastResync: 5
+            )
+        )
+        XCTAssertFalse(
+            LiveStreamLatencyPolicy.shouldResyncWithLiveEdge(
+                bufferedGap: 3.01,
+                secondsSinceLastResync: 4.99
+            )
+        )
+        XCTAssertTrue(
+            LiveStreamLatencyPolicy.shouldResyncWithLiveEdge(
+                bufferedGap: 3.01,
+                secondsSinceLastResync: 5
+            )
+        )
+    }
+
+    func testMSEPlayerHTMLUsesVideoOnlyAndBoundedLiveEdgeResync() throws {
         let html = try XCTUnwrap(
             URL(string: "https://192.0.2.1:8971").map {
                 FrigateMSEStreamView.html(
@@ -652,7 +921,11 @@ final class FeedPlaybackStateTests: XCTestCase {
             }
         )
 
-        XCTAssertFalse(html.contains("video.currentTime ="))
+        XCTAssertTrue(html.contains("function resyncWithLiveEdge(reason)"))
+        XCTAssertTrue(html.contains("video.currentTime = target"))
+        XCTAssertTrue(html.contains("now - lastLiveEdgeResyncAt < liveEdgeResyncCooldownMs"))
+        XCTAssertTrue(html.contains("resyncWithLiveEdge(\"buffer update\")"))
+        XCTAssertTrue(html.contains("resyncWithLiveEdge(\"latency check\")"))
         XCTAssertFalse(html.contains("setLiveSeekableRange"))
         XCTAssertFalse(html.contains("video.playbackRate = playbackRate"))
         XCTAssertTrue(html.contains("const videoCodecs"))

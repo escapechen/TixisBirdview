@@ -60,7 +60,7 @@ go2rtc stream name. JPEG snapshots are the compatible fallback.
   certificate's displayed member ID.
 - Versioning is semantic `MARKETING_VERSION` plus a monotonically increasing
   integer `CURRENT_PROJECT_VERSION`; validate with
-  `./scripts/check-versioning.sh`. Current source is 1.1.0 (build 2).
+  `./scripts/check-versioning.sh`. Current source is 1.1.1 (build 4).
 - Fast checks: `./scripts/check-public-safety.sh`,
   `./scripts/check-versioning.sh`, `git diff --check`, and shell syntax checks.
 - `./build-and-install.sh --test` runs the complete local suite without signing

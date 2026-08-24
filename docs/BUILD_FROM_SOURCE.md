@@ -101,7 +101,8 @@ If you modify the app, run its automated checks with:
 The suite is local: it does not need your Apple signing certificate, Frigate
 credentials, cameras, or an MQTT broker. It verifies the Frigate login
 request/session-cookie contract, MQTT credentials and event/review
-subscriptions, MQTT event-to-camera-popup routing, JPEG preview to live-MSE
+subscriptions, MQTT event-to-camera-popup routing, last-camera and server-side
+Birdseye feed selection, popup cooldown behavior, JPEG preview to live-MSE
 transition, one-click popup dismissal, and the no-keyboard-focus overlay rule.
 It does not build an app bundle, install anything, or ask for your administrator
 password. A normal `./build-and-install.sh` run performs this test step again

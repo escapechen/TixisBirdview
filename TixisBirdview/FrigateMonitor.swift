@@ -102,6 +102,31 @@ final class FrigateMonitor {
         }
     }
 
+    enum FeedSource: String, CaseIterable, Identifiable {
+        case latestActivityCamera
+        case frigateBirdseye
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .latestActivityCamera:
+                "Last activity camera"
+            case .frigateBirdseye:
+                "Frigate Birdseye composite"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .latestActivityCamera:
+                "Shows the camera from the most recent popup-triggering activity."
+            case .frigateBirdseye:
+                "Shows Frigate's server-side mosaic of all active Birdseye cameras."
+            }
+        }
+    }
+
     enum LiveStreamRoutingStatus: Equatable {
         case resolving
         case ready
@@ -340,13 +365,52 @@ final class FrigateMonitor {
     }
 
     struct OverlayActivity: Equatable {
-        let title: String
+        let classificationNames: [String]
         let confidence: String?
         let camera: String
         let date: Date
 
+        init(
+            classificationNames: [String],
+            confidence: String?,
+            camera: String,
+            date: Date
+        ) {
+            var seenNames = Set<String>()
+            self.classificationNames = classificationNames.compactMap { name in
+                let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let normalizedName = trimmedName.normalizedDetectionName
+                guard !normalizedName.isEmpty,
+                      seenNames.insert(normalizedName).inserted else {
+                    return nil
+                }
+                return trimmedName
+            }
+            self.confidence = confidence
+            self.camera = camera
+            self.date = date
+        }
+
+        var title: String {
+            let names = classificationNames.map(\.displayDetectionName)
+            return names.isEmpty ? "Activity" : names.joined(separator: ", ")
+        }
+
         var detail: String {
             "\(camera) • \(date.formatted(date: .omitted, time: .shortened))"
+        }
+
+        func merging(_ activity: Self) -> Self {
+            guard camera == activity.camera else {
+                return activity
+            }
+
+            return Self(
+                classificationNames: classificationNames + activity.classificationNames,
+                confidence: activity.confidence ?? confidence,
+                camera: camera,
+                date: max(date, activity.date)
+            )
         }
     }
 
@@ -374,6 +438,15 @@ final class FrigateMonitor {
     var feedMode: FeedMode {
         didSet {
             UserDefaults.standard.set(feedMode.rawValue, forKey: Self.feedModeKey)
+        }
+    }
+
+    var feedSource: FeedSource {
+        didSet {
+            UserDefaults.standard.set(feedSource.rawValue, forKey: Self.feedSourceKey)
+            if oldValue != feedSource {
+                streamSessionID = UUID()
+            }
         }
     }
 
@@ -584,6 +657,7 @@ final class FrigateMonitor {
     private static let usernameKey = "serverUsername"
     private static let overlayDurationKey = "overlayDurationSeconds"
     private static let feedModeKey = "feedMode"
+    private static let feedSourceKey = "feedSource"
     private static let liveStartupTimeoutKey = "liveStartupTimeoutSeconds"
     private static let liveDebugEnabledKey = "liveDebugEnabled"
     private static let eventDeliveryModeKey = "eventDeliveryMode"
@@ -604,6 +678,7 @@ final class FrigateMonitor {
     private static let confirmedInsecureServerAddressKey = "confirmedInsecureServerAddress"
     private static let confirmedInsecureMqttEndpointKey = "confirmedInsecureMqttEndpoint"
     private static let defaultServerAddress = "https://frigate.invalid"
+    private static let birdseyeCameraName = "birdseye"
     private static let defaultOverlayDurationSeconds = 20.0
     private static let defaultLiveStartupTimeoutSeconds = 5
     private static let defaultSoundAlertVolume = 0.6
@@ -624,6 +699,9 @@ final class FrigateMonitor {
         let savedOverlayDuration = UserDefaults.standard.double(forKey: Self.overlayDurationKey)
         overlayDurationSeconds = savedOverlayDuration > 0 ? savedOverlayDuration : Self.defaultOverlayDurationSeconds
         feedMode = FeedMode(rawValue: UserDefaults.standard.string(forKey: Self.feedModeKey) ?? "") ?? .jpeg
+        feedSource = FeedSource(
+            rawValue: UserDefaults.standard.string(forKey: Self.feedSourceKey) ?? ""
+        ) ?? .latestActivityCamera
         liveStartupTimeoutSeconds = UserDefaults.standard.object(forKey: Self.liveStartupTimeoutKey) == nil
             ? Self.defaultLiveStartupTimeoutSeconds
             : min(15, max(1, UserDefaults.standard.integer(forKey: Self.liveStartupTimeoutKey)))
@@ -702,6 +780,14 @@ final class FrigateMonitor {
     }
 
     var currentFeedCameraName: String {
+        if feedSource == .frigateBirdseye {
+            return Self.birdseyeCameraName
+        }
+
+        if shouldShowOverlay, let overlayActivity {
+            return overlayActivity.camera
+        }
+
         switch (latestEvent, latestReviewItem) {
         case let (event?, review?):
             let eventActivityTime = event.endTime ?? event.startTime
@@ -1194,20 +1280,27 @@ final class FrigateMonitor {
         }
 
         latestReviewItem = newestItem
-        scheduleLiveStreamMappingRefreshIfNeeded(for: newestItem.camera)
+        scheduleLiveStreamMappingRefreshIfNeeded(
+            for: feedSource == .frigateBirdseye ? Self.birdseyeCameraName : newestItem.camera
+        )
 
         let isNewItem = seenReviewItemIDs.insert(newestItem.id)
         let isRecent = Date().timeIntervalSince(newestItem.activityDate) < 120
-        if isNewItem && isRecent {
-            lastEventDescription = newestItem.displayDescription
-            presentAutomaticAlert(
-                OverlayActivity(
-                    title: newestItem.data.bestObjectDescription,
-                    confidence: nil,
-                    camera: newestItem.camera,
-                    date: newestItem.activityDate
-                )
-            )
+        lastEventDescription = newestItem.displayDescription
+        guard isRecent else {
+            return
+        }
+
+        let activity = OverlayActivity(
+            classificationNames: newestItem.data.objectNames,
+            confidence: nil,
+            camera: newestItem.camera,
+            date: newestItem.activityDate
+        )
+        if isNewItem {
+            presentAutomaticAlert(activity)
+        } else {
+            mergeIntoVisibleOverlay(activity)
         }
     }
 
@@ -1225,29 +1318,62 @@ final class FrigateMonitor {
 
         latestEvent = newestEvent
         lastEventDescription = newestEvent.displayDescription
-        scheduleLiveStreamMappingRefreshIfNeeded(for: newestEvent.camera)
+        scheduleLiveStreamMappingRefreshIfNeeded(
+            for: feedSource == .frigateBirdseye ? Self.birdseyeCameraName : newestEvent.camera
+        )
 
         let isNewEvent = seenEventIDs.insert(newestEvent.id)
         let isRecent = Date().timeIntervalSince(newestEvent.startedAt) < 90
-        if isNewEvent && isRecent {
-            presentAutomaticAlert(
-                OverlayActivity(
-                    title: newestEvent.displayLabel,
-                    confidence: newestEvent.confidenceDescription,
-                    camera: newestEvent.camera,
-                    date: newestEvent.startedAt
-                )
-            )
+        guard isRecent else {
+            return
+        }
+
+        let activity = OverlayActivity(
+            classificationNames: newestEvent.classificationNames,
+            confidence: newestEvent.confidenceDescription,
+            camera: newestEvent.camera,
+            date: newestEvent.startedAt
+        )
+        if isNewEvent {
+            presentAutomaticAlert(activity)
+        } else {
+            mergeIntoVisibleOverlay(activity)
         }
     }
 
     private func presentAutomaticAlert(_ activity: OverlayActivity) {
         if shouldShowAutomaticPopup() {
-            overlayActivity = activity
-            shouldShowOverlay = true
+            if shouldShowOverlay {
+                refreshVisibleOverlay(with: activity)
+            } else {
+                overlayActivity = activity
+                shouldShowOverlay = true
+            }
         }
 
         playSoundAlertIfEnabled()
+    }
+
+    private func refreshVisibleOverlay(with activity: OverlayActivity) {
+        if let currentActivity = overlayActivity,
+           currentActivity.camera == activity.camera {
+            overlayActivity = currentActivity.merging(activity)
+        } else {
+            overlayActivity = activity
+        }
+        scheduleOverlayDismissal()
+    }
+
+    @discardableResult
+    private func mergeIntoVisibleOverlay(_ activity: OverlayActivity) -> Bool {
+        guard shouldShowOverlay,
+              let currentActivity = overlayActivity,
+              currentActivity.camera == activity.camera else {
+            return false
+        }
+
+        overlayActivity = currentActivity.merging(activity)
+        return true
     }
 
     private func shouldShowAutomaticPopup() -> Bool {
@@ -1438,7 +1564,7 @@ final class FrigateMonitor {
         let data = try await requestData(for: URLRequest(url: baseURL.appending(path: "api/config")))
         let config = try JSONDecoder().decode(FrigateConfiguration.self, from: data)
 
-        return config.cameras.reduce(into: [String: String]()) { streamNames, entry in
+        var streamNames = config.cameras.reduce(into: [String: String]()) { streamNames, entry in
             guard let streamName = entry.value.live?.streams.values.first,
                   !streamName.isEmpty else {
                 return
@@ -1446,6 +1572,13 @@ final class FrigateMonitor {
 
             streamNames[entry.key] = streamName
         }
+
+        if config.birdseye?.enabled == true,
+           config.birdseye?.restream == true {
+            streamNames[Self.birdseyeCameraName] = Self.birdseyeCameraName
+        }
+
+        return streamNames
     }
 
     private func scheduleOverlayDismissal() {
@@ -2029,6 +2162,13 @@ struct FrigateEvent: Decodable, Identifiable, Hashable {
         subLabel?.displayDetectionName ?? label.displayDetectionName
     }
 
+    var classificationNames: [String] {
+        if let subLabel, !subLabel.normalizedDetectionName.isEmpty {
+            return [subLabel]
+        }
+        return [label]
+    }
+
     var confidenceDescription: String? {
         guard let topScore else {
             return nil
@@ -2046,6 +2186,48 @@ struct FrigateEvent: Decodable, Identifiable, Hashable {
         case startTime = "start_time"
         case endTime = "end_time"
         case topScore = "top_score"
+    }
+
+    init(
+        id: String,
+        camera: String,
+        label: String,
+        subLabel: String?,
+        startTime: TimeInterval,
+        endTime: TimeInterval?,
+        topScore: Double?
+    ) {
+        self.id = id
+        self.camera = camera
+        self.label = label
+        self.subLabel = subLabel
+        self.startTime = startTime
+        self.endTime = endTime
+        self.topScore = topScore
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        camera = try container.decode(String.self, forKey: .camera)
+        label = try container.decode(String.self, forKey: .label)
+        startTime = try container.decode(TimeInterval.self, forKey: .startTime)
+        endTime = try container.decodeIfPresent(TimeInterval.self, forKey: .endTime)
+        topScore = try container.decodeIfPresent(Double.self, forKey: .topScore)
+
+        if !container.contains(.subLabel) {
+            subLabel = nil
+        } else if try container.decodeNil(forKey: .subLabel) {
+            subLabel = nil
+        } else if let value = try? container.decode(String.self, forKey: .subLabel) {
+            // The HTTP events API stores the sublabel directly as a string.
+            subLabel = value
+        } else if var tuple = try? container.nestedUnkeyedContainer(forKey: .subLabel) {
+            // Live Frigate MQTT events encode it as [name, confidence].
+            subLabel = try? tuple.decode(String.self)
+        } else {
+            subLabel = nil
+        }
     }
 }
 
@@ -2085,8 +2267,14 @@ struct FrigateReviewItem: Decodable, Identifiable, Hashable {
 
         var objectNames: [String] {
             var seenNames = Set<String>()
-            return (objects + subLabels).filter {
-                seenNames.insert($0.normalizedDetectionName).inserted
+            return (objects + subLabels).compactMap { name in
+                let trimmedName = name.reviewDisplayDetectionName
+                let normalizedName = trimmedName.normalizedDetectionName
+                guard !normalizedName.isEmpty,
+                      seenNames.insert(normalizedName).inserted else {
+                    return nil
+                }
+                return trimmedName
             }
         }
 
@@ -2125,6 +2313,7 @@ struct FrigateReviewItem: Decodable, Identifiable, Hashable {
 
 private struct FrigateConfiguration: Decodable {
     let cameras: [String: Camera]
+    let birdseye: Birdseye?
 
     struct Camera: Decodable {
         let live: Live?
@@ -2133,11 +2322,25 @@ private struct FrigateConfiguration: Decodable {
     struct Live: Decodable {
         let streams: [String: String]
     }
+
+    struct Birdseye: Decodable {
+        let enabled: Bool?
+        let restream: Bool?
+    }
 }
 
 private extension String {
     var normalizedDetectionName: String {
         trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var reviewDisplayDetectionName: String {
+        let trimmedName = trimmingCharacters(in: .whitespacesAndNewlines)
+        let verifiedSuffix = "-verified"
+        guard trimmedName.lowercased().hasSuffix(verifiedSuffix) else {
+            return trimmedName
+        }
+        return String(trimmedName.dropLast(verifiedSuffix.count))
     }
 
     var displayDetectionName: String {

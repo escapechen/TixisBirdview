@@ -304,6 +304,17 @@ struct SettingsMenuView: View {
                         Text("Keep feed open: \(Int(monitor.overlayDurationSeconds)) seconds")
                     }
 
+                    Picker("Camera source", selection: $monitor.feedSource) {
+                        ForEach(FrigateMonitor.FeedSource.allCases) { source in
+                            Text(source.title).tag(source)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    Text(monitor.feedSource.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     Picker("Feed", selection: $monitor.feedMode) {
                         ForEach(FrigateMonitor.FeedMode.allCases) { mode in
                             Text(mode.title).tag(mode)

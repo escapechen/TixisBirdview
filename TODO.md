@@ -3,7 +3,7 @@
 Audit baseline: 2026-08-18. The signed and notarized 1.1.0 (build 2) DMG was
 accepted by Gatekeeper and installed successfully on a second Mac. The unsigned
 Release build, Xcode static analyzer, property-list validation, shell syntax
-check, and all 54 XCTest cases also pass. This file is the source of truth for
+check, and all 63 XCTest cases also pass. This file is the source of truth for
 remaining public-release work.
 
 ## P0 — before publishing a signed binary
@@ -105,7 +105,7 @@ remaining public-release work.
 
 ## Definition of release-ready
 
-All P0 items are complete, the local release workflow and 54+ tests pass from a
-clean checkout, the published artifact passes the checks in
+All P0 items are complete, the complete local test suite passes from a clean
+checkout, the published artifact passes the checks in
 `docs/RELEASING.md`, and no real credentials, private service URLs, or
 identifying image metadata are present.

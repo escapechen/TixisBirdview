@@ -4,6 +4,37 @@ All notable user-facing changes are recorded here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning when releases are tagged.
 
+## [1.1.1] — Unreleased
+
+### Added
+
+- Feed settings now offer either the camera from the latest accepted activity
+  or Frigate's server-side Birdseye composite. The composite keeps one
+  authenticated stream connection while Frigate displays several active
+  cameras in its mosaic.
+
+### Changed
+
+- A qualifying event from another camera can refresh an already visible popup
+  without reopening the window. Popup and sound cooldowns remain independent;
+  a popup-cooldown rejection no longer changes the camera visible in an open
+  last-camera feed.
+
+### Fixed
+
+- Live MSE playback now performs a cooldown-protected forward resynchronization
+  after WebKit drifts more than three seconds behind, before resorting to a full
+  player rebuild. Playback speed remains fixed and JPEG stays visible until the
+  live player has decoded a frame.
+- The visible activity badge now incorporates sub-classifications that Frigate
+  reports later for the same event or review. Each name appears only once per
+  popup session, and additional animals on the same camera are appended without
+  restarting the feed or replacing names already shown.
+- MQTT event decoding now accepts Frigate's live `[name, confidence]` sublabel
+  representation as well as the plain string returned by the HTTP events API.
+- Frigate's internal `*-verified` review marker is normalized to its base label,
+  so a selected classification such as `cat` still accepts a later named pet.
+
 ## [1.1.0] — 2026-08-18
 
 ### Added
@@ -137,3 +168,4 @@ versioning when releases are tagged.
 
 [1.0.0]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.0.0
 [1.1.0]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.1.0
+[1.1.1]: https://github.com/escapechen/TixisBirdview/compare/v1.1.0...HEAD

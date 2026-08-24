@@ -1,11 +1,11 @@
 {
-    "schema_version": 1,
-    "commit": "978a196bef664e498bebef1f314b617be238e690",
-    "indexed_at": "2026-07-27T09:46:43Z",
+    "schema_version": 2,
+    "commit": "f78017df9efec6d9fe375c5a3045e79a6ad9c71d",
+    "indexed_at": "2026-08-22T09:37:45Z",
     "project": "Users-marcel-Documents-repos-TixisBirdview",
-    "nodes": 436,
-    "edges": 1148,
-    "original_size": 1572864,
-    "compressed_size": 63965,
-    "compression_level": 9
+    "nodes": 911,
+    "edges": 3016,
+    "original_size": 4718592,
+    "compressed_size": 329077,
+    "compression_level": 3
 }

@@ -8,12 +8,24 @@ import SwiftUI
 import WebKit
 
 enum LiveStreamLatencyPolicy {
-    /// Keep enough complete media for WebKit to decode a camera GOP. Do not
-    /// seek or alter playback speed: both can make WKWebView stop decoding.
+    /// Keep enough complete media for WebKit to decode a camera GOP. Never
+    /// alter playback speed. A cooldown-protected forward seek is allowed only
+    /// after playback has decoded a frame and drifted materially from live.
     static let maximumBufferedSeconds = 6.0
     static let retainedBufferedSeconds = 5.0
+    static let targetLatencySeconds = 0.75
+    static let liveEdgeResyncThresholdSeconds = 3.0
+    static let liveEdgeResyncCooldownSeconds = 5.0
     static let maximumBufferedGapBeforeRecoverySeconds = 8.0
     static let maximumConsecutiveRecoveryAttempts = 3
+
+    static func shouldResyncWithLiveEdge(
+        bufferedGap: Double,
+        secondsSinceLastResync: Double
+    ) -> Bool {
+        bufferedGap > liveEdgeResyncThresholdSeconds
+            && secondsSinceLastResync >= liveEdgeResyncCooldownSeconds
+    }
 
     static func shouldRecoverFromExcessiveLag(bufferedGap: Double) -> Bool {
         bufferedGap > maximumBufferedGapBeforeRecoverySeconds
@@ -142,6 +154,9 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             const standardCodecs = [...videoCodecs, "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
             const maxBufferSeconds = \(LiveStreamLatencyPolicy.maximumBufferedSeconds);
             const keepBufferSeconds = \(LiveStreamLatencyPolicy.retainedBufferedSeconds);
+            const targetLatencySeconds = \(LiveStreamLatencyPolicy.targetLatencySeconds);
+            const liveEdgeResyncThresholdSeconds = \(LiveStreamLatencyPolicy.liveEdgeResyncThresholdSeconds);
+            const liveEdgeResyncCooldownMs = \(LiveStreamLatencyPolicy.liveEdgeResyncCooldownSeconds * 1000);
             const maximumBufferedGapBeforeRecoverySeconds = \(LiveStreamLatencyPolicy.maximumBufferedGapBeforeRecoverySeconds);
             const maxRecoveryAttempts = \(LiveStreamLatencyPolicy.maximumConsecutiveRecoveryAttempts);
             const playableFrameTimeoutMs = \(LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: startupTimeoutSeconds) * 1000);
@@ -165,6 +180,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             var useStandardCodecNegotiation = false;
             var lastPlaybackTime = -1;
             var lastPlaybackAdvanceAt = Date.now();
+            var lastLiveEdgeResyncAt = 0;
             var receivedSegments = 0;
             var appendedSegments = 0;
             var lastStats = {
@@ -272,6 +288,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 lastPlaybackTime = video.currentTime;
                 lastPlaybackAdvanceAt = Date.now();
               }
+              if (lastLiveEdgeResyncAt === 0) lastLiveEdgeResyncAt = Date.now();
               if (video.paused) ensurePlayback("loaded data");
             });
 
@@ -352,6 +369,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               appendedSegments = 0;
               lastPlaybackTime = -1;
               lastPlaybackAdvanceAt = Date.now();
+              lastLiveEdgeResyncAt = 0;
               lastStats = {
                 time: performance.now(), mediaTime: 0, received: 0, appended: 0, decoded: 0, dropped: 0
               };
@@ -460,6 +478,26 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               return sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1) - video.currentTime;
             }
 
+            function resyncWithLiveEdge(reason) {
+              if (!hasDecodedFirstFrame || !sourceBuffer?.buffered.length || sourceBuffer.updating) return false;
+              const now = Date.now();
+              const gap = bufferedGap();
+              if (!Number.isFinite(gap)
+                  || gap <= liveEdgeResyncThresholdSeconds
+                  || now - lastLiveEdgeResyncAt < liveEdgeResyncCooldownMs) return false;
+              const ranges = sourceBuffer.buffered;
+              const rangeStart = ranges.start(ranges.length - 1);
+              const rangeEnd = ranges.end(ranges.length - 1);
+              const target = Math.max(rangeStart, rangeEnd - targetLatencySeconds);
+              if (target <= video.currentTime + 0.1) return false;
+              lastLiveEdgeResyncAt = now;
+              lastPlaybackAdvanceAt = now;
+              debug(`resynced live edge from ${gap.toFixed(2)}s behind after ${reason}`);
+              video.currentTime = target;
+              if (video.paused) ensurePlayback("live-edge resync");
+              return true;
+            }
+
             function keepMediaSourceOpenEnded() {
               if (!mediaSource || mediaSource.readyState !== "open" || sourceBuffer?.updating) return;
               try {
@@ -559,6 +597,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                     if (sourceBuffer.mode) sourceBuffer.mode = "segments";
                     sourceBuffer.addEventListener("updateend", () => {
                       keepMediaSourceOpenEnded();
+                      resyncWithLiveEdge("buffer update");
                       if (video.paused) ensurePlayback("buffer update");
                       pump();
                       debugPlaybackStats();
@@ -582,7 +621,8 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             }
 
             video.addEventListener("timeupdate", () => {
-              if (lastPlaybackTime >= 0 && video.currentTime + 0.5 < lastPlaybackTime) {
+              if (lastPlaybackTime >= 0 && video.currentTime + 0.5 < lastPlaybackTime
+                  && Date.now() - lastLiveEdgeResyncAt > 2000) {
                 recover("Live stream timeline moved backwards.");
                 return;
               }
@@ -597,6 +637,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
               if (!shouldReconnect || !socket || socket.readyState !== WebSocket.OPEN || isRecovering) return;
               debugPlaybackStats();
               const gap = bufferedGap();
+              if (resyncWithLiveEdge("latency check")) return;
               if (hasDecodedFirstFrame && Number.isFinite(gap)
                   && gap > maximumBufferedGapBeforeRecoverySeconds) {
                 recover("Live stream playback fell too far behind.");

@@ -22,8 +22,13 @@ High reasoning).
   receive them immediately from its MQTT broker.
 - Opens a movable, timed feed for selected classifications, for example
   `person`, `cat`, or `Tixi`.
-- Shows the detected label, confidence, camera, a countdown, and either JPEG
-  snapshots or a low-latency go2rtc live stream.
+- Shows the detected labels, confidence, camera, a countdown, and either JPEG
+  snapshots or a low-latency go2rtc live stream. If Frigate identifies a
+  sub-classification later, the badge adds it once and retains other names
+  detected during that popup session.
+- Lets the user show either the camera responsible for the latest accepted
+  popup or Frigate's server-side Birdseye composite. Birdseye can display
+  several simultaneously active cameras without reconnecting the player.
 - Offers optional popup sound alerts with a selectable macOS sound and volume,
   plus independent popup and sound cooldowns.
 - Keeps the password in the macOS Keychain and uses normal TLS certificate
@@ -110,7 +115,13 @@ use only example addresses and no real credentials.
    credentials are stored separately in the macOS Keychain. Disabling TLS
    displays a warning and requires confirmation.
 4. On **Feed & Sound**, set **Keep feed open** to the number of seconds you
-   want the popup visible, then choose a feed mode:
+   want the popup visible, then choose a camera source:
+   - **Last activity camera**: follows the most recent event accepted by the
+     popup cooldown.
+   - **Frigate Birdseye composite**: shows Frigate's server-side mosaic of all
+     currently active Birdseye cameras. Frigate must have Birdseye enabled with
+     `restream: true`.
+   Then choose a feed mode:
    - **JPEG snapshots**: reliable, updated twice per second.
    - **Live stream**: lower latency go2rtc video when the camera supports it.
    When using **Live stream**, choose **Retry live player after** (1–15
@@ -121,10 +132,11 @@ use only example addresses and no real credentials.
    key-frame interval. Enable **Write live-player diagnostics to terminal
    output** when troubleshooting; its concise state lines intentionally omit
    server addresses, camera names, credentials, cookies, and tokens. The muted
-   WebKit player starts with video-only negotiation and does not seek or
-   accelerate the live playhead. If go2rtc supplies only an initializer, it
-   retries with Frigate's standard codec negotiation; an excessively delayed
-   player is rebuilt cleanly.
+   WebKit player starts with video-only negotiation and never accelerates
+   playback. After video has started, a cooldown-protected forward seek restores
+   the live edge if WebKit drifts more than three seconds behind. If go2rtc
+   supplies only an initializer, it retries with Frigate's standard codec
+   negotiation; an excessively delayed player is rebuilt cleanly.
 5. Still on **Feed & Sound**, optionally enable **Sound alert**, select a
    sound, set its volume, and use **Preview** to test it. **Sound cooldown**
    appears once sound is enabled and suppresses repeated automatic sounds.
@@ -159,8 +171,11 @@ by Frigate is best.
 
 Birdseye's **continuous**, **motion**, and **objects** modes decide what
 Frigate draws in its Birdseye mosaic. They do not create a TixisBirdview popup
-by themselves. TixisBirdview reacts to new Frigate event/review records and
-filters them by their object classification.
+by themselves. TixisBirdview reacts to new Frigate event/review records,
+filters them by their object classification, and applies popup and sound
+cooldowns independently. With the Birdseye camera source selected, those
+events control popup visibility while the displayed stream remains the single
+server-composited Birdseye feed.
 
 ## Troubleshooting
 
@@ -170,6 +185,7 @@ filters them by their object classification.
 | No popup | Make sure monitoring is not paused. Temporarily select **Any tracked object**, then check the status line for the last activity Frigate sent. With MQTT selected, use **Verify** in the Connection tab first. |
 | A name never triggers | Add the exact event label or sub-label shown in Frigate. A Birdseye image without a new event does not count. |
 | Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream. JPEG is loaded immediately while MSE keeps connecting in the background; reduce **Retry live player after** to retry sooner. |
+| Birdseye source is unavailable | Confirm global Frigate Birdseye is enabled with `restream: true`. Individual cameras must also be enabled for Birdseye in the desired `objects`, `motion`, or `continuous` mode. |
 | Feed is on the wrong screen | Drag it once to the intended display. Its position is saved. |
 | Update check fails | Confirm the Mac can reach `api.github.com`. No Frigate or MQTT settings are included in update requests. |
 
@@ -197,8 +213,9 @@ Xcode and the included script; no Swift knowledge is required. Follow the
   geometry.
 
 Release versions use semantic `MAJOR.MINOR.PATCH` numbering; the independent
-integer build number increases for every distributed build. The current source
-is **1.1.0 (build 2)**. Maintainers can validate both values and the changelog
+integer build number increases for every distributed build. The current
+development source is **1.1.1 (build 4)**; the latest published release remains
+**1.1.0 (build 2)**. Maintainers can validate the source values and changelog
 with `./scripts/check-versioning.sh`.
 
 Before contributing, run `./scripts/install-git-hooks.sh` once. The hook and
