@@ -328,9 +328,9 @@ struct SettingsMenuView: View {
 
                     if monitor.feedMode == .stream {
                         Stepper(value: $monitor.liveStartupTimeoutSeconds, in: 1...15) {
-                            Text("Retry live player after: \(monitor.liveStartupTimeoutSeconds) seconds")
+                            Text("Retry connection after: \(monitor.liveStartupTimeoutSeconds) seconds")
                         }
-                        .help("JPEG stays visible while live video retries in the background. This is how long a live attempt gets to produce a frame before it reconnects.")
+                        .help("JPEG stays visible while the WebSocket connection retries. Codec negotiation and the first video frame receive separate safety timeouts.")
 
                         Text("JPEG starts loading immediately while live video connects.")
                             .font(.caption)

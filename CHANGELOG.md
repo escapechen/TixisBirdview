@@ -22,6 +22,9 @@ versioning when releases are tagged.
 
 ### Fixed
 
+- Short connection retry preferences no longer abort go2rtc codec negotiation.
+  WebSocket connection, codec negotiation, and first-frame startup now have
+  separate time limits while JPEG remains visible.
 - Live MSE playback now performs a cooldown-protected forward resynchronization
   after WebKit drifts more than three seconds behind, before resorting to a full
   player rebuild. Playback speed remains fixed and JPEG stays visible until the

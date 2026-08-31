@@ -124,12 +124,13 @@ use only example addresses and no real credentials.
    Then choose a feed mode:
    - **JPEG snapshots**: reliable, updated twice per second.
    - **Live stream**: lower latency go2rtc video when the camera supports it.
-   When using **Live stream**, choose **Retry live player after** (1–15
+   When using **Live stream**, choose **Retry connection after** (1–15
    seconds). TixisBirdview starts JPEG immediately and keeps it visible while
    the MSE player connects or retries in the background. It switches to video
-   only after a decoded frame arrives. The default is 5 seconds; use a shorter
-   time for doorbell-like feeds or increase it for a camera with a slow
-   key-frame interval. Enable **Write live-player diagnostics to terminal
+   only after a decoded frame arrives. The default is 5 seconds. Codec
+   negotiation receives at least 10 seconds and the first frame at least 15
+   seconds, so an aggressive connection retry cannot abort a healthy lazy
+   go2rtc producer. Enable **Write live-player diagnostics to terminal
    output** when troubleshooting; its concise state lines intentionally omit
    server addresses, camera names, credentials, cookies, and tokens. The muted
    WebKit player starts with video-only negotiation and never accelerates
@@ -184,7 +185,7 @@ server-composited Birdseye feed.
 | Menu-bar icon is red | Confirm the URL, Frigate availability, macOS TLS trust, and login details. When using MQTT, also check the Connection pane's delivery status and broker settings. TixisBirdview shows a short connection-lost/restored message when the state changes. |
 | No popup | Make sure monitoring is not paused. Temporarily select **Any tracked object**, then check the status line for the last activity Frigate sent. With MQTT selected, use **Verify** in the Connection tab first. |
 | A name never triggers | Add the exact event label or sub-label shown in Frigate. A Birdseye image without a new event does not count. |
-| Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream. JPEG is loaded immediately while MSE keeps connecting in the background; reduce **Retry live player after** to retry sooner. |
+| Live stream is black or frozen | Confirm the camera plays in Frigate and has a compatible go2rtc restream. JPEG is loaded immediately while MSE keeps connecting in the background; reduce **Retry connection after** to retry a failed WebSocket sooner. Birdseye output must remain within the server encoder's supported dimensions. |
 | Birdseye source is unavailable | Confirm global Frigate Birdseye is enabled with `restream: true`. Individual cameras must also be enabled for Birdseye in the desired `objects`, `motion`, or `continuous` mode. |
 | Feed is on the wrong screen | Drag it once to the intended display. Its position is saved. |
 | Update check fails | Confirm the Mac can reach `api.github.com`. No Frigate or MQTT settings are included in update requests. |

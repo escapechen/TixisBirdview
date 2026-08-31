@@ -909,6 +909,21 @@ final class FeedPlaybackStateTests: XCTestCase {
         )
     }
 
+    func testLiveMSEHandshakeCannotBeAbortedByAggressiveRetryPreference() {
+        XCTAssertEqual(
+            LiveStreamStartupPolicy.negotiationWaitSeconds(configuredSeconds: 1),
+            10
+        )
+        XCTAssertEqual(
+            LiveStreamStartupPolicy.negotiationWaitSeconds(configuredSeconds: 12),
+            12
+        )
+        XCTAssertEqual(
+            LiveStreamStartupPolicy.playableFrameWaitSeconds(configuredSeconds: 1),
+            15
+        )
+    }
+
     func testMSEPlayerHTMLUsesVideoOnlyAndBoundedLiveEdgeResync() throws {
         let html = try XCTUnwrap(
             URL(string: "https://192.0.2.1:8971").map {
@@ -926,6 +941,9 @@ final class FeedPlaybackStateTests: XCTestCase {
         XCTAssertTrue(html.contains("now - lastLiveEdgeResyncAt < liveEdgeResyncCooldownMs"))
         XCTAssertTrue(html.contains("resyncWithLiveEdge(\"buffer update\")"))
         XCTAssertTrue(html.contains("resyncWithLiveEdge(\"latency check\")"))
+        XCTAssertTrue(html.contains("const negotiationTimeoutMs = 10000"))
+        XCTAssertTrue(html.contains("sending MSE codec negotiation"))
+        XCTAssertTrue(html.contains("}, negotiationTimeoutMs);"))
         XCTAssertFalse(html.contains("setLiveSeekableRange"))
         XCTAssertFalse(html.contains("video.playbackRate = playbackRate"))
         XCTAssertTrue(html.contains("const videoCodecs"))

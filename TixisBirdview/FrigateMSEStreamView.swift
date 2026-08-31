@@ -33,9 +33,17 @@ enum LiveStreamLatencyPolicy {
 }
 
 enum LiveStreamStartupPolicy {
+    /// Opening the WebSocket may use the user's retry preference, but go2rtc
+    /// needs enough time to start a lazy producer and negotiate its codec.
+    static let minimumNegotiationWaitSeconds = 10
+
     /// A camera may need to wait for its next H.264 keyframe after MSE has
     /// negotiated successfully. JPEG remains visible during this interval.
     static let minimumPlayableFrameWaitSeconds = 15
+
+    static func negotiationWaitSeconds(configuredSeconds: Int) -> Int {
+        max(minimumNegotiationWaitSeconds, min(15, max(1, configuredSeconds)))
+    }
 
     static func playableFrameWaitSeconds(configuredSeconds: Int) -> Int {
         max(minimumPlayableFrameWaitSeconds, min(15, max(1, configuredSeconds)))
@@ -143,6 +151,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
             const camera = \(encodedCameraName);
             const video = document.getElementById("feed");
             const startupTimeoutMs = \(min(15, max(1, startupTimeoutSeconds)) * 1000);
+            const negotiationTimeoutMs = \(LiveStreamStartupPolicy.negotiationWaitSeconds(configuredSeconds: startupTimeoutSeconds) * 1000);
             const debugEnabled = \(debugEnabled ? "true" : "false");
             // The alert player is intentionally muted. Requesting audio makes
             // WebKit synchronize video to camera audio timestamps and can turn
@@ -559,6 +568,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 mediaSource = new MediaSourceConstructor();
                 mediaSource.addEventListener("sourceopen", () => {
                   try {
+                    debug("sending MSE codec negotiation");
                     currentSocket.send(JSON.stringify({ type: "mse", value: supported }));
                   } catch (error) {
                     recover(`Live stream setup failed: ${error.message || error}`);
@@ -576,7 +586,7 @@ struct FrigateMSEStreamView: NSViewRepresentable {
                 clearTimeout(firstFrameTimer);
                 firstFrameTimer = setTimeout(() => {
                   recover("Frigate connected but did not negotiate a live video format.");
-                }, startupTimeoutMs);
+                }, negotiationTimeoutMs);
               };
 
               currentSocket.onmessage = (event) => {
