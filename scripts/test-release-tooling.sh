@@ -31,6 +31,13 @@ fi
 "$SCRIPT_DIR/scripts/check-release-metadata.sh" >/dev/null
 "$SCRIPT_DIR/publish-release.sh" --help >/dev/null
 
+SILENT_TAG_VERIFY_COUNT="$(/usr/bin/grep -Fc 'git verify-tag "$TAG" >/dev/null 2>&1' \
+    "$SCRIPT_DIR/publish-release.sh")"
+if [[ "$SILENT_TAG_VERIFY_COUNT" -ne 2 ]]; then
+    echo "Release publishing may expose local GPG identity details." >&2
+    exit 1
+fi
+
 /usr/bin/sed -E 's/^(## \[[0-9]+\.[0-9]+\.[0-9]+\] — )[0-9]{4}-[0-9]{2}-[0-9]{2}$/\1Unreleased/' \
     "$SCRIPT_DIR/CHANGELOG.md" > "$BAD_CHANGELOG"
 if CHANGELOG_FILE="$BAD_CHANGELOG" "$SCRIPT_DIR/scripts/check-release-metadata.sh" >/dev/null 2>&1; then

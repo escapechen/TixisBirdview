@@ -130,7 +130,7 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
         echo "Existing local tag $TAG does not point to HEAD." >&2
         exit 1
     fi
-    git verify-tag "$TAG" >/dev/null
+    git verify-tag "$TAG" >/dev/null 2>&1
 fi
 
 REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$TAG^{}" | /usr/bin/awk '{ print $1 }')"
@@ -177,7 +177,7 @@ fi
 
 if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     git tag -s "$TAG" -m "TixisBirdview $VERSION (build $BUILD)"
-    git verify-tag "$TAG" >/dev/null
+    git verify-tag "$TAG" >/dev/null 2>&1
 fi
 if [[ -z "$REMOTE_TAG" ]]; then
     git push origin "$TAG"
