@@ -4,7 +4,7 @@ All notable user-facing changes are recorded here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning when releases are tagged.
 
-## [1.1.1] — Unreleased
+## [1.1.1] — 2026-08-31
 
 ### Added
 
@@ -171,4 +171,4 @@ versioning when releases are tagged.
 
 [1.0.0]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.0.0
 [1.1.0]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.1.0
-[1.1.1]: https://github.com/escapechen/TixisBirdview/compare/v1.1.0...HEAD
+[1.1.1]: https://github.com/escapechen/TixisBirdview/releases/tag/v1.1.1

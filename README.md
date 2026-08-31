@@ -52,20 +52,20 @@ window UI while using a blurred synthetic scene and non-identifiable figure.
 
 Download the signed and Apple-notarized DMG from the
 [latest GitHub release](https://github.com/escapechen/TixisBirdview/releases/latest).
-The current release is **1.1.0 (build 2)** and supports both Apple Silicon and
+The current release is **1.1.1 (build 4)** and supports both Apple Silicon and
 Intel Macs. Users do not need Xcode, an Apple Developer membership, or any
 Swift knowledge.
 
-1. Download `TixisBirdview-1.1.0-2.dmg`.
+1. Download `TixisBirdview-1.1.1-4.dmg`.
 2. Open the DMG and drag **TixisBirdview** onto its **Applications** shortcut.
 3. Open TixisBirdview from `/Applications`. macOS may show its normal first-run
    confirmation for an app downloaded from the internet.
 
-The release also includes `TixisBirdview-1.1.0-2.dmg.sha256`. To verify the
+The release also includes `TixisBirdview-1.1.1-4.dmg.sha256`. To verify the
 download, keep both files in the same directory and run:
 
 ```sh
-shasum -a 256 -c TixisBirdview-1.1.0-2.dmg.sha256
+shasum -a 256 -c TixisBirdview-1.1.1-4.dmg.sha256
 ```
 
 Building from source remains available for contributors and anyone who wants
@@ -214,10 +214,9 @@ Xcode and the included script; no Swift knowledge is required. Follow the
   geometry.
 
 Release versions use semantic `MAJOR.MINOR.PATCH` numbering; the independent
-integer build number increases for every distributed build. The current
-development source is **1.1.1 (build 4)**; the latest published release remains
-**1.1.0 (build 2)**. Maintainers can validate the source values and changelog
-with `./scripts/check-versioning.sh`.
+integer build number increases for every distributed build. The current source
+and published release are **1.1.1 (build 4)**. Maintainers can validate the
+source values and changelog with `./scripts/check-versioning.sh`.
 
 Before contributing, run `./scripts/install-git-hooks.sh` once. The hook and
 local release checks reject signing Team IDs, Developer ID selections, private

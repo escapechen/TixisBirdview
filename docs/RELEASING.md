@@ -3,7 +3,7 @@
 This page is for the person publishing the app. End users should install the
 signed release and never need Xcode.
 
-Complete every P0 item in the [release-readiness TODO](../TODO.md) before
+Complete every P0 item in the [release-readiness TODO](../TODO.md) as part of
 publishing a signed binary.
 
 ## Is a public release possible?
@@ -120,6 +120,36 @@ TixisBirdview-<version>-<build>.dmg.sha256
 signing configuration are ignored by Git. If the Mac has multiple Developer ID
 Application identities, copy `release.local.env.example` to
 `release.local.env` and select the certificate by its SHA-1 fingerprint there.
+
+## Publish a GitHub release
+
+Install and authenticate the GitHub CLI once (`brew install gh`, then
+`gh auth login`). Finalize the Xcode version/build, dated changelog section,
+README release number, and release commit. From a clean `main` checkout, run:
+
+```bash
+./publish-release.sh
+```
+
+After one confirmation, this maintainer-only script runs the local safety,
+version, metadata, and XCTest checks; builds and verifies the signed/notarized
+DMG; pushes `main` when it is only locally ahead; creates and verifies a signed
+Git tag; publishes the DMG and checksum to GitHub; downloads both assets again;
+and byte-compares them with the local originals. It never uses GitHub Actions
+or uploads signing keys or notarization credentials. Those remain in the local
+Keychain.
+
+If building succeeded but a later network operation failed, inspect the state
+and rerun with `--reuse-artifacts`. The option accepts only the exact files for
+the current version/build and revalidates their checksum, signature, stapled
+notarization ticket, and Gatekeeper assessment before publishing.
+
+The internal Gitea mirror is deliberately not part of the public-release
+transaction. Sync the release commit and tag separately after GitHub succeeds:
+
+```bash
+git push gitea main v<version>
+```
 
 ## Alternative: create a signed, notarized release in Xcode
 

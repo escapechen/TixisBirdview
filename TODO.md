@@ -1,9 +1,9 @@
 # TixisBirdview release-readiness TODO
 
-Audit baseline: 2026-08-18. The signed and notarized 1.1.0 (build 2) DMG was
+Audit baseline: 2026-08-31. The signed and notarized 1.1.0 (build 2) DMG was
 accepted by Gatekeeper and installed successfully on a second Mac. The unsigned
 Release build, Xcode static analyzer, property-list validation, shell syntax
-check, and all 63 XCTest cases also pass. This file is the source of truth for
+check, and all 65 XCTest cases also pass. This file is the source of truth for
 remaining public-release work.
 
 ## P0 — before publishing a signed binary
@@ -34,8 +34,9 @@ remaining public-release work.
   and staples the app and DMG, verifies Gatekeeper, and writes a SHA-256 file.
 - [x] Run that workflow with the release owner's Developer ID certificate and
   verify the signed, notarized DMG on a second Mac.
-- [ ] Publish the exact DMG and checksum produced by the release workflow. Do
-  not publish the local installer-script output.
+- [x] Publish the exact DMG and checksum produced by the release workflow. The
+  maintainer-only `publish-release.sh` verifies the downloaded GitHub assets;
+  local installer-script output is never published.
 
 ## P1 — release quality and security
 
